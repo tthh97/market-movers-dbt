@@ -23,10 +23,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+from _triage_common import ROOT, skip as _skip_raw
 
 # The operating rules the pipeline must obey. They go into the prompt so the model
 # can flag a fix that would violate one (touches_operating_rules).
@@ -86,8 +84,7 @@ Operating rules (must not be violated by any proposed fix):
 
 
 def _skip(msg: str) -> None:
-    print(f"diagnose_failure: {msg} - skipping (no model call).")
-    sys.exit(0)
+    _skip_raw(f"diagnose_failure: {msg} - skipping (no model call).")
 
 
 def main() -> None:

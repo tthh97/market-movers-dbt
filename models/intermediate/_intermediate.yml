@@ -2,9 +2,20 @@ version: 2
 
 models:
   - name: int_daily_returns
-    description: Per-ticker daily returns, 5/20-day moving averages, running peak, and drawdown.
+    description: >
+      Per-ticker daily returns (1d/5d/1m), 5/20-day moving averages, running
+      peak, and drawdown.
     columns:
       - name: ticker
         tests: [not_null]
       - name: trade_date
         tests: [not_null]
+
+  - name: int_latest_daily_returns
+    description: >
+      One row per ticker: its most recent day from int_daily_returns. Single
+      source of truth for "latest row per ticker" - every mart that needs a
+      current snapshot selects from here instead of re-deriving it.
+    columns:
+      - name: ticker
+        tests: [not_null, unique]

@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
-import math
 import os
 import random
+import sys
 
 import duckdb
 
@@ -23,6 +23,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DB_PATH = os.path.join(ROOT, "market.duckdb")
 WATCHLIST = os.path.join(ROOT, "seeds", "watchlist.csv")
+
+sys.path.insert(0, ROOT)
+from ingest import DDL, UPSERT  # noqa: E402 - single source of truth for the raw.prices schema
 
 TRADING_DAYS = 180          # ~8 months of weekdays
 SEED = 42
@@ -34,12 +37,13 @@ PROFILES = {
     "equity": dict(start=200,   drift=0.0006,  vol=0.018),
     "etf":    dict(start=500,   drift=0.0005,  vol=0.010),
 }
-# Override a couple of starts so prices look plausible per ticker.
+# Override a couple of starts so prices look plausible per ticker. Only the
+# tickers currently in seeds/watchlist.csv - unlisted equities fall through to
+# PROFILES["equity"]["start"].
 START_OVERRIDE = {
-    "BTC-USD": 60000, "ETH-USD": 2500, "AVAX-USD": 12, "SOL-USD": 150,
-    "ISRG": 520, "MDT": 90, "SYK": 380, "BSX": 90, "DXCM": 80, "ABT": 120, "EW": 75,
-    "AAPL": 230, "MSFT": 450, "NVDA": 130, "AMZN": 200, "GOOGL": 180,
-    "META": 600, "TSLA": 250, "SPY": 740, "QQQ": 600,
+    "BTC-USD": 60000, "ETH-USD": 2500, "SOL-USD": 150,
+    "AAPL": 230, "MSFT": 450, "NVDA": 130, "GOOGL": 180,
+    "META": 600, "SPY": 740, "QQQ": 600,
 }
 
 
@@ -88,32 +92,8 @@ def main() -> None:
         all_rows.extend(gen_series(row["ticker"], row["asset_class"], dates))
 
     con = duckdb.connect(DB_PATH)
-    con.execute("create schema if not exists raw;")
-    con.execute(
-        """
-        create table if not exists raw.prices (
-            ticker      varchar,
-            trade_date  date,
-            open        double,
-            high        double,
-            low         double,
-            close       double,
-            adj_close   double,
-            volume      bigint,
-            source      varchar,
-            ingested_at timestamp,
-            primary key (ticker, trade_date)
-        );
-        """
-    )
-    con.executemany(
-        """
-        insert or replace into raw.prices
-        (ticker, trade_date, open, high, low, close, adj_close, volume, source, ingested_at)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """,
-        all_rows,
-    )
+    con.execute(DDL)
+    con.executemany(UPSERT, all_rows)
     n = con.execute("select count(*) from raw.prices;").fetchone()[0]
     con.close()
     print(f"Seeded {len(all_rows)} synthetic rows; raw.prices now holds {n} rows.")

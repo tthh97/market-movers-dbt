@@ -22,8 +22,8 @@ import datetime as dt
 import json
 import os
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+from _triage_common import ROOT, load_json as _load
+
 TARGET = os.path.join(ROOT, "target")
 RUN_RESULTS = os.path.join(TARGET, "run_results.json")
 MANIFEST = os.path.join(TARGET, "manifest.json")
@@ -40,16 +40,6 @@ MAX_DEF_CHARS = 4000
 
 def _now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
-
-
-def _load(path: str) -> dict | None:
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
 
 
 def _truncate(text: str | None, limit: int) -> str | None:

@@ -23,12 +23,15 @@ flowchart LR
     STGP --> FCT["fct_prices<br/>(incremental fact)"]
 
     FCT --> INT["int_daily_returns<br/>(view)"]
+    INT --> LATEST["int_latest_daily_returns<br/>(view)"]
 
-    FCT --> MOV["mart_movers<br/>(table)"]
+    LATEST --> MOV["mart_movers<br/>(table)"]
     STGW --> MOV
-    INT --> MOM["mart_momentum<br/>(table)"]
+    LATEST --> MOM["mart_momentum<br/>(table)"]
+    INT --> MOM
     STGW --> MOM
-    INT --> PB["mart_portfolio_bias<br/>(table)"]
+    LATEST --> PB["mart_portfolio_bias<br/>(table)"]
+    INT --> PB
     STGW --> PB
     MOV --> SEC["mart_sector_overview<br/>(table)"]
 
@@ -75,15 +78,22 @@ what is already stored, instead of rebuilding all of history (like a delta
 refresh in Power BI). *Why:* speed and stability - you touch only new data, and
 same-day re-runs refresh cleanly rather than duplicating.
 
-**4. Intermediate - the sub-assembly bench.** `int_daily_returns` turns raw
-prices into the building blocks analysts actually use: daily return, 5- and
-20-day moving averages, running peak, and drawdown from that peak. *Why a
-separate layer:* three different marts need these same calculations, so compute
-them once here instead of repeating the window functions in every mart.
+**4. Intermediate - the sub-assembly bench.** Two views:
+- `int_daily_returns` turns raw prices into the building blocks analysts
+  actually use: 1-day/5-day/1-month returns, 5- and 20-day moving averages,
+  running peak, and drawdown from that peak.
+- `int_latest_daily_returns` takes the single most recent row per ticker off
+  `int_daily_returns`. This exists because three marts each need "today's
+  snapshot per ticker" - computing it once here means the row-numbering logic
+  lives in exactly one place instead of being copy-pasted into every mart.
+
+*Why a separate layer at all:* every mart downstream needs these same
+calculations, so compute them once here instead of repeating the window
+functions in every mart.
 
 **5. Marts - the finished-goods shelves.** Four dashboard-ready tables:
-- `mart_movers` - latest snapshot per ticker, ranked by 1-day return (with 5-day
-  and ~1-month returns).
+- `mart_movers` - latest snapshot per ticker (from `int_latest_daily_returns`),
+  ranked by 1-day return (with 5-day and ~1-month returns).
 - `mart_momentum` - trend (5d vs 20d average), drawdown, and how extreme today's
   move is versus that ticker's own volatility.
 - `mart_portfolio_bias` - holdings only: each holding's correlation to the Nasdaq
@@ -92,7 +102,7 @@ them once here instead of repeating the window functions in every mart.
   and the best/worst mover. *Why materialized as tables:* these are read by the
   notebook and should be fast and stable, not recomputed on every read.
 
-**6. The QC inspectors - dbt tests.** 24 data tests run in the same pass as the
+**6. The QC inspectors - dbt tests.** 26 data tests run in the same pass as the
 build (`dbt build`, not `dbt run` alone). They are the smoke detectors of the
 pipeline. Examples of what they enforce:
 - `not_null` / `unique` - no missing labels, no duplicate serial numbers (e.g.

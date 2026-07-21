@@ -35,15 +35,9 @@ corr_calc as (
 
 current_dd as (
 
-    select ticker, drawdown_from_peak as current_drawdown
-    from (
-        select
-            ticker,
-            drawdown_from_peak,
-            row_number() over (partition by ticker order by trade_date desc) as rn
-        from holding_returns
-    )
-    where rn = 1
+    select l.ticker, l.drawdown_from_peak as current_drawdown
+    from {{ ref('int_latest_daily_returns') }} l
+    join holdings h using (ticker)
 
 )
 

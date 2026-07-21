@@ -25,31 +25,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
-import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+from _triage_common import ROOT, load_json as _load, skip as _skip_raw
 
 CONFIDENCE_EMOJI = {"high": "🟢", "medium": "🟡", "low": "🔴"}
 
 
 def _skip(msg: str) -> None:
-    print(f"propose_fix: {msg} - skipping (no proposal surfaced).")
-    sys.exit(0)
-
-
-def _load(path: str) -> dict | None:
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
+    _skip_raw(f"propose_fix: {msg} - skipping (no proposal surfaced).")
 
 
 def _failing_names(context: dict | None) -> list[str]:

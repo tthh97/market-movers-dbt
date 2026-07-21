@@ -1,9 +1,6 @@
 with latest as (
 
-    select
-        *,
-        row_number() over (partition by ticker order by trade_date desc) as rn
-    from {{ ref('int_daily_returns') }}
+    select * from {{ ref('int_latest_daily_returns') }}
 
 ),
 
@@ -34,5 +31,4 @@ select
 from latest l
 join vol v using (ticker)
 join {{ ref('stg_watchlist') }} w using (ticker)
-where l.rn = 1
 order by (l.ma_5 / nullif(l.ma_20, 0)) desc
