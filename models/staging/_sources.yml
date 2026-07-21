@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: Raw daily OHLCV landed from yfinance (or the synthetic sample generator).
+    tables:
+      - name: prices
+        description: One row per ticker per trading day, as loaded.
+        loaded_at_field: ingested_at
+        freshness:
+          warn_after: {count: 48, period: hour}
+          error_after: {count: 120, period: hour}
+        columns:
+          - name: ticker
+            tests: [not_null]
+          - name: trade_date
+            tests: [not_null]

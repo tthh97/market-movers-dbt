@@ -1,0 +1,8 @@
+dbt-duckdb>=1.9,<2.0
+duckdb>=1.0
+yfinance>=0.2.40
+pandas>=2.0
+
+# Assisted-triage diagnosis step (scripts/diagnose_failure.py)
+anthropic>=0.70
+python-dotenv>=1.0

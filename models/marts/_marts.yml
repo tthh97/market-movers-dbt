@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: fct_prices
+    description: Incremental fact of daily prices. Grain = one row per ticker per trading day.
+    columns:
+      - name: price_key
+        description: Surrogate key, ticker + trade_date.
+        tests: [not_null, unique]
+      - name: ticker
+        description: Foreign key to the watchlist.
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_watchlist')
+                field: ticker
+
+  - name: mart_movers
+    description: Latest snapshot per ticker, ranked by 1-day return, with 5D and ~1M returns.
+    columns:
+      - name: ticker
+        tests: [not_null, unique]
+
+  - name: mart_momentum
+    description: Trend (5d vs 20d MA), drawdown, and volatility-adjusted latest move.
+    columns:
+      - name: ticker
+        tests: [not_null, unique]
+
+  - name: mart_portfolio_bias
+    description: Holdings only — correlation to Nasdaq (QQQ) and current drawdown.
+    columns:
+      - name: ticker
+        tests: [not_null, unique]
+
+  - name: mart_sector_overview
+    description: One row per sector (benchmarks excluded) - name count, average returns, breadth, and best/worst mover.
+    columns:
+      - name: sector
+        tests: [not_null, unique]
+      - name: n_names
+        tests: [not_null]

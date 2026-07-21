@@ -1,0 +1,21 @@
+ticker,name,sector,asset_class,is_holding,is_benchmark
+AAPL,Apple,tech,equity,false,false
+MSFT,Microsoft,tech,equity,false,false
+NVDA,Nvidia,tech,equity,true,false
+GOOGL,Alphabet,tech,equity,false,false
+META,Meta Platforms,tech,equity,false,false
+CAT,Caterpillar,industrials,equity,true,false
+GE,GE Aerospace,industrials,equity,false,false
+HON,Honeywell,industrials,equity,false,false
+BA,Boeing,industrials,equity,false,false
+UNP,Union Pacific,industrials,equity,false,false
+JPM,JPMorgan Chase,financials,equity,true,false
+BAC,Bank of America,financials,equity,false,false
+GS,Goldman Sachs,financials,equity,false,false
+V,Visa,financials,equity,false,false
+MA,Mastercard,financials,equity,false,false
+BTC-USD,Bitcoin,crypto,crypto,true,false
+ETH-USD,Ethereum,crypto,crypto,false,false
+SOL-USD,Solana,crypto,crypto,false,false
+SPY,SPDR S&P 500 ETF,benchmark,etf,false,true
+QQQ,Invesco Nasdaq-100 ETF,benchmark,etf,false,true

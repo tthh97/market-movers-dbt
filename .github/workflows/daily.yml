@@ -1,0 +1,93 @@
+name: daily-refresh
+
+on:
+  schedule:
+    # 22:00 UTC on weekdays, after the US market close
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch: {}
+
+# The assisted-triage step 3 opens a GitHub issue on failure, which needs write
+# access to issues. Everything else is read-only.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ingest latest prices
+        run: python ingest.py --period 6mo
+
+      - name: Build and test models
+        run: dbt build --profiles-dir .
+
+      # Assisted-triage step 1 (capture, no AI): on a failed build, turn dbt's
+      # own artifacts into one curated failure_context.json for later diagnosis.
+      - name: Capture failure context
+        if: failure()
+        run: python scripts/capture_failure.py
+
+      - name: Upload failure context
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-context
+          path: failure_context.json
+          retention-days: 14
+
+      # Assisted-triage step 2 (diagnose): one Claude API call turns the failure
+      # context into a proposed diagnosis with safety flags. Skips itself if the
+      # ANTHROPIC_API_KEY secret is not set; a human approves any fix.
+      - name: Diagnose failure (Claude API)
+        if: failure()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/diagnose_failure.py
+
+      - name: Upload diagnosis
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnosis
+          path: diagnosis.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Assisted-triage step 3 (propose): turn the diagnosis into a human-approval
+      # GitHub issue so someone is actually notified, instead of having to dig
+      # through Actions artifacts. It PROPOSES; a human approves. Never self-edits.
+      - name: Propose fix (open issue)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/propose_fix.py
+
+      - name: Upload proposed fix
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proposed-fix
+          path: proposed_fix_issue.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Generate docs
+        run: dbt docs generate --profiles-dir .
+
+      - name: Upload dbt target (docs + run results)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-target
+          path: target/
+          retention-days: 14

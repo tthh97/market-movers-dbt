@@ -1,0 +1,4 @@
+# Extra deps for the exploration notebook (notebooks/explore.ipynb)
+jupyterlab>=4.0
+matplotlib>=3.7
+pandas>=2.0

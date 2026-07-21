@@ -1,0 +1,10 @@
+version: 2
+
+models:
+  - name: int_daily_returns
+    description: Per-ticker daily returns, 5/20-day moving averages, running peak, and drawdown.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]

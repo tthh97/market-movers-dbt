@@ -1,0 +1,8 @@
+market_movers:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: market.duckdb
+      schema: main
+      threads: 4

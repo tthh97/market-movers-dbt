@@ -1,0 +1,28 @@
+version: 2
+
+models:
+  - name: stg_prices
+    description: Cleaned, typed, de-duplicated daily OHLCV. Grain = one row per ticker per trading day.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]
+      - name: close_price
+        tests: [not_null]
+
+  - name: stg_watchlist
+    description: The tracked universe with sector grouping and holding/benchmark flags.
+    columns:
+      - name: ticker
+        tests: [not_null, unique]
+      - name: sector
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["tech", "industrials", "financials", "crypto", "benchmark"]
+      - name: asset_class
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["crypto", "equity", "etf"]
