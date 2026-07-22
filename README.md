@@ -144,15 +144,7 @@ safety flags, and a human-approval checklist linked back to its
 The pipeline never edits code and never self-heals; it proposes a fix for a human to
 approve, and always leaves `main` untouched.
 
-## Resume bullets (use only what's true for you)
 
-- Built a reproducible market-data pipeline (yfinance → DuckDB → dbt) modeling a
-  multi-asset watchlist across staging/intermediate/marts layers, with 26
-  automated dbt tests and source-freshness monitoring.
-- Implemented an incremental dbt fact with delete+insert upserts on a
-  ticker-date surrogate key for idempotent daily refreshes.
-- Automated a scheduled daily refresh in GitHub Actions (ingest → build → test →
-  docs), producing movers, momentum/drawdown, and portfolio-correlation marts.
 
 ## Notes / honest caveats
 
