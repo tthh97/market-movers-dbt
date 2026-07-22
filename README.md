@@ -100,6 +100,50 @@ tests/                        # singular test: no non-positive close prices
   correlation to the Nasdaq (QQQ) and its current drawdown — a quick check on
   how much your "diversified" book is really just one beta.
 
+## Demo: watch the triage layer catch, diagnose, and propose a fix
+
+The assisted-triage layer is easiest to believe when you see it fire. The break used
+below is a realistic data-drift fault: the `sector` accepted-values list is narrowed
+to drop `crypto`, so the three crypto tickers (BTC-USD, ETH-USD, SOL-USD) now fail the
+check. The break lives on the `demo/triage` branch, so `main` always stays green.
+
+### Run it locally (about two minutes)
+
+```bash
+git switch demo/triage                          # the branch that carries the fault
+.venv/bin/dbt build --profiles-dir .            # RED:  PASS=22 ERROR=1 SKIP=13
+.venv/bin/python scripts/capture_failure.py     # writes failure_context.json (no AI)
+.venv/bin/python scripts/diagnose_failure.py    # one Claude call -> diagnosis.json
+.venv/bin/python scripts/propose_fix.py         # renders the human-approval report
+```
+
+Then apply the proposed fix (add `crypto` back to the list in
+`models/staging/_staging.yml`) and rebuild to confirm green:
+
+```bash
+.venv/bin/dbt build --profiles-dir .            # GREEN: PASS=36
+```
+
+### Run it in CI (opens a real GitHub issue)
+
+With `ANTHROPIC_API_KEY` set as a repo secret, dispatch the nightly workflow on the
+demo branch. It fails the build, captures the evidence, makes one Claude call, and
+`propose_fix.py` opens a GitHub issue tagged `[assisted-triage]` so a human is
+actually notified instead of digging through Actions logs:
+
+```bash
+gh workflow run daily-refresh --ref demo/triage
+```
+
+**Live example:** a dispatched run captured the failure, made one Claude call, and
+opened [issue #1](https://github.com/tthh97/market-movers-dbt/issues/1) automatically
+(authored by `github-actions`), carrying the structured diagnosis, a confidence level,
+safety flags, and a human-approval checklist linked back to its
+[CI run](https://github.com/tthh97/market-movers-dbt/actions/runs/29897665841).
+
+The pipeline never edits code and never self-heals; it proposes a fix for a human to
+approve, and always leaves `main` untouched.
+
 ## Resume bullets (use only what's true for you)
 
 - Built a reproducible market-data pipeline (yfinance → DuckDB → dbt) modeling a
