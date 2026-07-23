@@ -2,11 +2,11 @@ name: daily-refresh
 
 on:
   schedule:
-    # 03:30 UTC on weekdays = 11:30 SGT (UTC+8), same calendar day.
-    # That is 23:30 ET the previous evening, so each run ingests the most
-    # recent settled US close: Mon picks up Friday, Tue-Fri pick up the
-    # prior weekday. Every session lands exactly once, one day behind.
-    - cron: "30 3 * * 1-5"
+    # 08:00 UTC on weekdays = 16:00 SGT (UTC+8), same calendar day.
+    # That is 04:00 ET, before the US open, so each run ingests the most
+    # recent settled close: Mon picks up Friday, Tue-Fri pick up the prior
+    # weekday. Every session lands exactly once, one day behind.
+    - cron: "0 8 * * 1-5"
   workflow_dispatch: {}
 
 # The assisted-triage step 3 opens a GitHub issue on failure, which needs write
