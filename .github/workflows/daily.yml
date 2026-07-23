@@ -2,10 +2,11 @@ name: daily-refresh
 
 on:
   schedule:
-    # 15:30 UTC on weekdays = 23:30 SGT (UTC+8), same calendar day.
-    # Note: this is mid-session for US markets (11:30 ET), so the latest bar
-    # ingested is intraday and not a settled close.
-    - cron: "30 15 * * 1-5"
+    # 03:30 UTC on weekdays = 11:30 SGT (UTC+8), same calendar day.
+    # That is 23:30 ET the previous evening, so each run ingests the most
+    # recent settled US close: Mon picks up Friday, Tue-Fri pick up the
+    # prior weekday. Every session lands exactly once, one day behind.
+    - cron: "30 3 * * 1-5"
   workflow_dispatch: {}
 
 # The assisted-triage step 3 opens a GitHub issue on failure, which needs write
