@@ -1,7 +1,12 @@
-dbt-duckdb>=1.9,<2.0
-duckdb>=1.0
+dbt-snowflake>=1.9,<2.0
+snowflake-connector-python>=3.12
 yfinance>=0.2.40
 pandas>=2.0
+
+# Offline, zero-credential demo path only (DBT_TARGET=duckdb).
+# Not used when the pipeline runs against Snowflake.
+dbt-duckdb>=1.9,<2.0
+duckdb>=1.0
 
 # Assisted-triage diagnosis step (scripts/diagnose_failure.py)
 anthropic>=0.70

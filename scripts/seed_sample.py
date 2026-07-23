@@ -1,8 +1,14 @@
 """
-Generate synthetic daily OHLCV into raw.prices in market.duckdb.
+Generate synthetic daily OHLCV into raw.prices.
 
-This exists so the whole dbt pipeline runs with ZERO network access -- a
-reviewer can clone the repo and `python scripts/seed_sample.py && dbt build`.
+This exists so the whole dbt pipeline runs with ZERO network access and ZERO
+credentials -- a reviewer can clone the repo and run:
+
+    DBT_TARGET=duckdb python scripts/seed_sample.py
+    DBT_TARGET=duckdb dbt build --profiles-dir .
+
+It writes through the same warehouse layer as ingest.py, so it also works
+against Snowflake if DBT_TARGET says so; DuckDB is simply the point of it.
 For real data, use ingest.py instead (same target table, idempotent upsert).
 
 Tickers and flags are read from seeds/watchlist.csv so the sample always
@@ -17,15 +23,12 @@ import os
 import random
 import sys
 
-import duckdb
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-DB_PATH = os.path.join(ROOT, "market.duckdb")
 WATCHLIST = os.path.join(ROOT, "seeds", "watchlist.csv")
 
 sys.path.insert(0, ROOT)
-from ingest import DDL, UPSERT  # noqa: E402 - single source of truth for the raw.prices schema
+import warehouse  # noqa: E402 - single source of truth for the raw.prices schema
 
 TRADING_DAYS = 180          # ~8 months of weekdays
 SEED = 42
@@ -91,10 +94,10 @@ def main() -> None:
     for row in watchlist:
         all_rows.extend(gen_series(row["ticker"], row["asset_class"], dates))
 
-    con = duckdb.connect(DB_PATH)
-    con.execute(DDL)
-    con.executemany(UPSERT, all_rows)
-    n = con.execute("select count(*) from raw.prices;").fetchone()[0]
+    con = warehouse.connect()
+    print(f"Seeding into {warehouse.describe()}")
+    con.upsert(all_rows)
+    n = con.count()
     con.close()
     print(f"Seeded {len(all_rows)} synthetic rows; raw.prices now holds {n} rows.")
 

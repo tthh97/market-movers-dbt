@@ -1,9 +1,13 @@
 """
-Ingest real daily OHLCV from yfinance into raw.prices in market.duckdb.
+Ingest real daily OHLCV from yfinance into raw.prices.
 
-Idempotent: re-running upserts on (ticker, trade_date) via INSERT OR REPLACE,
-so a same-day re-run refreshes rather than duplicates -- the same incremental
-discipline the downstream dbt fact relies on.
+The destination is whatever DBT_TARGET selects - Snowflake by default, or the
+local DuckDB file for the offline demo. See warehouse.py; this script does not
+care which backend it is talking to.
+
+Idempotent: re-running upserts on (ticker, trade_date), so a same-day re-run
+refreshes rather than duplicates -- the same incremental discipline the
+downstream dbt fact relies on.
 
 Usage:
     python ingest.py                 # default 6 months
@@ -17,35 +21,12 @@ import csv
 import datetime as dt
 import os
 
-import duckdb
 import yfinance as yf
 
+import warehouse
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(HERE, "market.duckdb")
 WATCHLIST = os.path.join(HERE, "seeds", "watchlist.csv")
-
-DDL = """
-create schema if not exists raw;
-create table if not exists raw.prices (
-    ticker      varchar,
-    trade_date  date,
-    open        double,
-    high        double,
-    low         double,
-    close       double,
-    adj_close   double,
-    volume      bigint,
-    source      varchar,
-    ingested_at timestamp,
-    primary key (ticker, trade_date)
-);
-"""
-
-UPSERT = """
-insert or replace into raw.prices
-(ticker, trade_date, open, high, low, close, adj_close, volume, source, ingested_at)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-"""
 
 
 def tickers() -> list[str]:
@@ -89,18 +70,18 @@ def main() -> None:
     ap.add_argument("--period", default="6mo", help="yfinance period, e.g. 3mo, 6mo, 1y")
     args = ap.parse_args()
 
-    con = duckdb.connect(DB_PATH)
-    con.execute(DDL)
+    con = warehouse.connect()
+    print(f"Loading into {warehouse.describe()}")
 
     total = 0
     for t in tickers():
         print(f"Fetching {t} ...")
         rows = fetch(t, args.period)
         if rows:
-            con.executemany(UPSERT, rows)
+            con.upsert(rows)
             total += len(rows)
 
-    n = con.execute("select count(*) from raw.prices;").fetchone()[0]
+    n = con.count()
     con.close()
     print(f"Upserted {total} rows; raw.prices now holds {n} rows.")
 

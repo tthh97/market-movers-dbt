@@ -1,7 +1,42 @@
 market_movers:
-  target: dev
+  # Snowflake is the warehouse. The duckdb output is kept only for the offline,
+  # zero-credential demo path: DBT_TARGET=duckdb python scripts/seed_sample.py
+  # followed by DBT_TARGET=duckdb dbt build --profiles-dir .
+  target: "{{ env_var('DBT_TARGET', 'snowflake') }}"
+
   outputs:
-    dev:
+
+    # Key-pair auth. The default target, and the only one CI uses: Snowflake is
+    # retiring password sign-in for service users, so this is the path that has
+    # to keep working. dbt renders Jinja in profiles.yml per *value*, after the
+    # YAML is parsed, so auth cannot be chosen with an {% if %} block here -
+    # hence two outputs rather than one conditional one.
+    snowflake:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', '') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'TRANSFORMER') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'WH_XS') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'MARKET_MOVERS') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA', 'dbt_dev') }}"
+      threads: 8
+
+    # Password auth, for local exploration before the key pair exists.
+    # DBT_TARGET=snowflake_pw. Not usable from CI.
+    snowflake_pw:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'TRANSFORMER') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'WH_XS') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'MARKET_MOVERS') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA', 'dbt_dev') }}"
+      threads: 8
+
+    duckdb:
       type: duckdb
       path: market.duckdb
       schema: main
