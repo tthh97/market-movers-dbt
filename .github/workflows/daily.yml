@@ -18,6 +18,15 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # Snowflake is the default target in profiles.yml, but CI has no Snowflake
+    # credentials, so the nightly stays on the offline DuckDB path. Set at job
+    # level so ingest, build and docs generate all agree - a per-step env is one
+    # forgotten step away from a half-Snowflake run. To move the nightly to
+    # Snowflake: add the SNOWFLAKE_* secrets, then drop this block.
+    env:
+      DBT_TARGET: duckdb
+
     steps:
       - uses: actions/checkout@v4
 
