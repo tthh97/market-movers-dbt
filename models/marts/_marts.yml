@@ -28,7 +28,7 @@ models:
         tests: [not_null, unique]
 
   - name: mart_portfolio_bias
-    description: Holdings only — correlation to Nasdaq (QQQ) and current drawdown.
+    description: Holdings only - correlation to Nasdaq (QQQ) and current drawdown.
     columns:
       - name: ticker
         tests: [not_null, unique]

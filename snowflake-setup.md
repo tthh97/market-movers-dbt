@@ -1,4 +1,4 @@
-# Snowflake Setup — market-movers migration
+# Snowflake Setup - market-movers migration
 
 Runbook for standing up Snowflake and pointing dbt + Claude Code at it.
 Drop this in the repo root so Claude Code can read it as context.
@@ -13,10 +13,10 @@ constraint (not the credits). Start it on a day you can work continuously.
 At signup:
 
 - **Cloud/region**: AWS `ap-southeast-1` (Singapore). Keeps latency low and
-  avoids cross-region egress. Note the per-credit rate shown at signup —
+  avoids cross-region egress. Note the per-credit rate shown at signup -
   it is higher than the US East headline figure.
 - **Edition**: trial usually starts on Enterprise. Fine for now. When it
-  converts to pay-as-you-go, drop to **Standard** — zero-copy cloning works
+  converts to pay-as-you-go, drop to **Standard** - zero-copy cloning works
   on Standard, so Slim CI is unaffected.
 - **Account identifier**: after signup, note your `<orgname>-<account_name>`.
   This is the `account` value dbt needs. Find it under Snowsight →
@@ -95,7 +95,7 @@ about when they say "how do you handle access control?"
 
 ## 2. Key-pair auth (do this, not passwords)
 
-Snowflake is phasing out password auth for programmatic users through 2026 —
+Snowflake is phasing out password auth for programmatic users through 2026 -
 service users must move to key-pair, OAuth, PAT, or WIF. If you set this up
 with a password now you will be redoing it, and CI will break at some point.
 Do it once, correctly.
@@ -106,7 +106,7 @@ Generate a key pair locally:
 mkdir -p ~/.snowflake && chmod 700 ~/.snowflake
 cd ~/.snowflake
 
-# Unencrypted — simplest for CI. Keep the file out of the repo.
+# Unencrypted - simplest for CI. Keep the file out of the repo.
 openssl genrsa 2048 \
   | openssl pkcs8 -topk8 -inform PEM -nocrypt -out dbt_key.p8
 openssl rsa -in dbt_key.p8 -pubout -out dbt_key.pub
@@ -141,7 +141,7 @@ CREATE USER IF NOT EXISTS DBT_CI
 GRANT ROLE <TRANSFORMER_ROLE> TO USER DBT_CI;
 ```
 
-`TYPE = SERVICE` matters — it exempts these users from the MFA prompts that
+`TYPE = SERVICE` matters - it exempts these users from the MFA prompts that
 apply to human users, which is exactly what you want for automated runs.
 Your own Snowsight login stays a human user with MFA.
 
@@ -189,10 +189,10 @@ market_movers:
       threads: 4
 ```
 
-Env vars, not literals — same file works locally and in CI.
+Env vars, not literals - same file works locally and in CI.
 
 ```bash
-# .envrc or shell profile — NOT committed
+# .envrc or shell profile - NOT committed
 export SNOWFLAKE_ACCOUNT="ORGNAME-ACCOUNTNAME"
 export SNOWFLAKE_USER="DBT_DEV"
 export SNOWFLAKE_PRIVATE_KEY_PATH="$HOME/.snowflake/dbt_key.p8"
@@ -222,7 +222,7 @@ Most of it ports untouched. The parts that need attention:
 |---|---|---|
 | Source data | local file / DuckDB table | `<DATABASE>.RAW` tables |
 | Load step | DuckDB write from Python | `write_pandas` via `snowflake-connector-python` |
-| Identifiers | case-insensitive-ish | UPPERCASE by default — watch quoting |
+| Identifiers | case-insensitive-ish | UPPERCASE by default - watch quoting |
 | Date functions | DuckDB dialect | `DATEADD`, `DATE_TRUNC`, `TO_DATE` |
 | `dbt_utils` | mostly fine | mostly fine, re-run `dbt deps` |
 | Incremental | limited | `incremental_strategy='merge'` with `unique_key` |
@@ -230,13 +230,13 @@ Most of it ports untouched. The parts that need attention:
 The new material worth building (this is what moves the resume, not the
 port itself):
 
-1. **Incremental models** on the fact layer with `merge` strategy —
+1. **Incremental models** on the fact layer with `merge` strategy -
    daily prices are a genuine incremental case, not a contrived one.
 2. **Slim CI** on PRs: clone prod schema (zero-copy, free), run
    `dbt build --select state:modified+ --defer --state ./prod-manifest`.
    Requires downloading the prod `manifest.json` artifact from the nightly
-   run — that is the piece people get stuck on.
-3. **Triage layer carries Snowflake context** — add `query_id` and
+   run - that is the piece people get stuck on.
+3. **Triage layer carries Snowflake context** - add `query_id` and
    warehouse to the failure report so the Claude diagnosis has real
    warehouse context, not just compiled SQL.
 
@@ -286,13 +286,13 @@ results, inspect schemas, and confirm a model built correctly. That single
 capability changes it from writing SQL blind to closing the loop.
 
 There is also a Snowflake MCP server (Snowflake Labs) if you would rather
-expose the warehouse as tools than shell out — worth a look, but the CLI
+expose the warehouse as tools than shell out - worth a look, but the CLI
 route is fewer moving parts and works today.
 
 **Cost discipline while working with Claude Code**: it is easy to run
 dozens of exploratory queries in a session. Each resume bills a 60-second
 minimum. With `AUTO_SUSPEND = 60` and back-to-back queries the warehouse
-stays warm, so this is a small effect — but the resource monitor is your
+stays warm, so this is a small effect - but the resource monitor is your
 real backstop. Check `SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY`
 after the first week to see actual burn against the estimate.
 
