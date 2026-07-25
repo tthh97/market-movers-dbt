@@ -14,7 +14,7 @@ calc as (
     select
         ticker,
         trade_date,
-        close_price,
+        closing_price,
         lag(close_price)     over ({{ by_ticker }}) as prev_close,
         close_price / nullif(lag(close_price, 1)  over ({{ by_ticker }}), 0) - 1 as daily_return,
         close_price / nullif(lag(close_price, 5)  over ({{ by_ticker }}), 0) - 1 as ret_5d,
