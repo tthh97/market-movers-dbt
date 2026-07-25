@@ -19,3 +19,4 @@ ETH-USD,Ethereum,crypto,crypto,false,false
 SOL-USD,Solana,crypto,crypto,false,false
 SPY,SPDR S&P 500 ETF,benchmark,etf,false,true
 QQQ,Invesco Nasdaq-100 ETF,benchmark,etf,false,true
+NVDA,NVIDIA Corp,tech,equity,true,false
