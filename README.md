@@ -111,13 +111,14 @@ tests/                        # singular test: no non-positive close prices
 
 ## Demo: watch the triage layer catch, diagnose, and propose a fix
 
-The assisted-triage layer is easiest to believe when you see it fire. Two demo
+The assisted-triage layer is easiest to believe when you see it fire. Three demo
 branches each carry one realistic fault, so `main` always stays green:
 
 | Branch | Fault | Test that catches it |
 | --- | --- | --- |
 | `demo/triage` | `sector` accepted-values list narrowed to drop `crypto`, so BTC-USD, ETH-USD and SOL-USD fail. Data drift: the warehouse gained a category the contract was never told about. | `accepted_values_stg_watchlist_sector` |
 | `demo/dup-ticker` | A second NVDA row in the watchlist. Upstream fault: the same instrument arriving twice from a source with no key. | `unique_stg_watchlist_ticker` |
+| `demo/renamed-column` | `int_daily_returns` selects `closing_price`, which `fct_prices` does not have. Schema drift: an upstream rename nobody propagated. | none - it errors at build time |
 
 ### Run it locally (about two minutes)
 
@@ -164,6 +165,16 @@ diagnosis, a confidence level, safety flags, and a human-approval checklist:
   from [this run](https://github.com/tthh97/market-movers-dbt/actions/runs/30170585086)
 - `demo/dup-ticker` → [issue #9](https://github.com/tthh97/market-movers-dbt/issues/9)
   from [this run](https://github.com/tthh97/market-movers-dbt/actions/runs/30170684064)
+- `demo/renamed-column` → [issue #10](https://github.com/tthh97/market-movers-dbt/issues/10)
+  from [this run](https://github.com/tthh97/market-movers-dbt/actions/runs/30171213913)
+
+
+The first two are test failures (`PASS=22 ERROR=1 SKIP=13`); the third errors at
+build time, so the whole mart layer skips (`PASS=17 ERROR=1 SKIP=18`). Worth
+comparing the diagnoses: the model error comes back **high** confidence with the
+offending line named, while the two data-drift faults come back **medium** and ask
+for a read-only inspection first. A code bug is knowable from the artifacts; a
+surprising data value is not.
 
 The pipeline never edits code and never self-heals; it proposes a fix for a human to
 approve, and always leaves `main` untouched.
