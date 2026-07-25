@@ -57,11 +57,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-duckdb
     env:
+      # Every warehouse identifier comes from a secret, not from source. These
+      # are not credentials, but a public repo has no reason to advertise the
+      # account's internal layout.
       DBT_TARGET: snowflake
       SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
       SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
-      SNOWFLAKE_WAREHOUSE: COMPUTE_WH
-      SNOWFLAKE_DATABASE: MARKET_MOVERS
+      SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+      SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -85,19 +88,20 @@ jobs:
           printf '%s\n' "$SNOWFLAKE_PRIVATE_KEY" > "$RUNNER_TEMP/sf_ci_key.p8"
           echo "SNOWFLAKE_PRIVATE_KEY_PATH=$RUNNER_TEMP/sf_ci_key.p8" >> "$GITHUB_ENV"
 
-      # Least privilege, enforced per step: LOADER may write RAW but cannot read
-      # ANALYTICS; TRANSFORMER may read RAW and build ANALYTICS but cannot write
-      # RAW. Neither can reach ACCOUNTADMIN - the CI user is a SERVICE user with
+      # Least privilege, enforced per step. The loader role may write the raw
+      # landing schema but cannot read the analytics one; the transformer role
+      # may read raw and build analytics but cannot write raw. Neither can reach
+      # ACCOUNTADMIN - the CI user is a SERVICE user with
       # DEFAULT_SECONDARY_ROLES = ().
-      - name: Ingest latest prices (LOADER)
+      - name: Ingest latest prices (loader role)
         env:
-          SNOWFLAKE_ROLE: LOADER
+          SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE_LOADER }}
         run: python ingest.py --period 6mo
 
-      - name: Build and test models (TRANSFORMER)
+      - name: Build and test models (transformer role)
         env:
-          SNOWFLAKE_ROLE: TRANSFORMER
-          SNOWFLAKE_SCHEMA: ANALYTICS
+          SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE_TRANSFORMER }}
+          SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
         run: dbt build --profiles-dir .
 
       # Assisted-triage step 1 (capture, no AI): on a failed build, turn dbt's
@@ -152,8 +156,8 @@ jobs:
 
       - name: Generate docs
         env:
-          SNOWFLAKE_ROLE: TRANSFORMER
-          SNOWFLAKE_SCHEMA: ANALYTICS
+          SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE_TRANSFORMER }}
+          SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
         run: dbt docs generate --profiles-dir .
 
       - name: Upload dbt target (docs + run results)

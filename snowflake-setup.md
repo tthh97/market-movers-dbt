@@ -32,7 +32,7 @@ Run in a Snowsight worksheet as `ACCOUNTADMIN`.
 USE ROLE ACCOUNTADMIN;
 
 -- Cost guardrail FIRST, before anything can run.
-CREATE RESOURCE MONITOR IF NOT EXISTS RM_PORTFOLIO
+CREATE RESOURCE MONITOR IF NOT EXISTS <RESOURCE_MONITOR>
   WITH CREDIT_QUOTA = 20
   FREQUENCY = MONTHLY
   START_TIMESTAMP = IMMEDIATELY
@@ -42,50 +42,50 @@ CREATE RESOURCE MONITOR IF NOT EXISTS RM_PORTFOLIO
     ON 100 PERCENT DO SUSPEND
     ON 110 PERCENT DO SUSPEND_IMMEDIATE;
 
-CREATE WAREHOUSE IF NOT EXISTS WH_XS
+CREATE WAREHOUSE IF NOT EXISTS <WAREHOUSE>
   WAREHOUSE_SIZE      = 'XSMALL'
   AUTO_SUSPEND        = 60          -- seconds. non-negotiable.
   AUTO_RESUME         = TRUE
   INITIALLY_SUSPENDED = TRUE
-  RESOURCE_MONITOR    = RM_PORTFOLIO;
+  RESOURCE_MONITOR    = <RESOURCE_MONITOR>;
 
-CREATE DATABASE IF NOT EXISTS MARKET_MOVERS;
-CREATE SCHEMA   IF NOT EXISTS MARKET_MOVERS.RAW;        -- EL landing zone
-CREATE SCHEMA   IF NOT EXISTS MARKET_MOVERS.ANALYTICS;  -- dbt prod target
+CREATE DATABASE IF NOT EXISTS <DATABASE>;
+CREATE SCHEMA   IF NOT EXISTS <DATABASE>.RAW;        -- EL landing zone
+CREATE SCHEMA   IF NOT EXISTS <DATABASE>.<ANALYTICS_SCHEMA>;  -- dbt prod target
 
-CREATE ROLE IF NOT EXISTS LOADER;       -- writes RAW only
-CREATE ROLE IF NOT EXISTS TRANSFORMER;  -- reads RAW, owns ANALYTICS
-CREATE ROLE IF NOT EXISTS REPORTER;     -- reads ANALYTICS only
+CREATE ROLE IF NOT EXISTS <LOADER_ROLE>;       -- writes RAW only
+CREATE ROLE IF NOT EXISTS <TRANSFORMER_ROLE>;  -- reads RAW, owns <ANALYTICS_SCHEMA>
+CREATE ROLE IF NOT EXISTS <REPORTER_ROLE>;     -- reads <ANALYTICS_SCHEMA> only
 ```
 
 Grants:
 
 ```sql
-GRANT USAGE ON WAREHOUSE WH_XS TO ROLE LOADER;
-GRANT USAGE ON WAREHOUSE WH_XS TO ROLE TRANSFORMER;
-GRANT USAGE ON WAREHOUSE WH_XS TO ROLE REPORTER;
+GRANT USAGE ON WAREHOUSE <WAREHOUSE> TO ROLE <LOADER_ROLE>;
+GRANT USAGE ON WAREHOUSE <WAREHOUSE> TO ROLE <TRANSFORMER_ROLE>;
+GRANT USAGE ON WAREHOUSE <WAREHOUSE> TO ROLE <REPORTER_ROLE>;
 
-GRANT USAGE ON DATABASE MARKET_MOVERS TO ROLE LOADER;
-GRANT USAGE ON DATABASE MARKET_MOVERS TO ROLE TRANSFORMER;
-GRANT USAGE ON DATABASE MARKET_MOVERS TO ROLE REPORTER;
+GRANT USAGE ON DATABASE <DATABASE> TO ROLE <LOADER_ROLE>;
+GRANT USAGE ON DATABASE <DATABASE> TO ROLE <TRANSFORMER_ROLE>;
+GRANT USAGE ON DATABASE <DATABASE> TO ROLE <REPORTER_ROLE>;
 
--- LOADER: write to RAW
-GRANT USAGE, CREATE TABLE ON SCHEMA MARKET_MOVERS.RAW TO ROLE LOADER;
+-- <LOADER_ROLE>: write to RAW
+GRANT USAGE, CREATE TABLE ON SCHEMA <DATABASE>.RAW TO ROLE <LOADER_ROLE>;
 
--- TRANSFORMER: read RAW, own ANALYTICS, and create its own dev/CI schemas
-GRANT USAGE ON SCHEMA MARKET_MOVERS.RAW TO ROLE TRANSFORMER;
-GRANT SELECT ON ALL TABLES    IN SCHEMA MARKET_MOVERS.RAW TO ROLE TRANSFORMER;
-GRANT SELECT ON FUTURE TABLES IN SCHEMA MARKET_MOVERS.RAW TO ROLE TRANSFORMER;
-GRANT ALL ON SCHEMA MARKET_MOVERS.ANALYTICS TO ROLE TRANSFORMER;
-GRANT CREATE SCHEMA ON DATABASE MARKET_MOVERS TO ROLE TRANSFORMER;
+-- <TRANSFORMER_ROLE>: read RAW, own <ANALYTICS_SCHEMA>, and create its own dev/CI schemas
+GRANT USAGE ON SCHEMA <DATABASE>.RAW TO ROLE <TRANSFORMER_ROLE>;
+GRANT SELECT ON ALL TABLES    IN SCHEMA <DATABASE>.RAW TO ROLE <TRANSFORMER_ROLE>;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA <DATABASE>.RAW TO ROLE <TRANSFORMER_ROLE>;
+GRANT ALL ON SCHEMA <DATABASE>.<ANALYTICS_SCHEMA> TO ROLE <TRANSFORMER_ROLE>;
+GRANT CREATE SCHEMA ON DATABASE <DATABASE> TO ROLE <TRANSFORMER_ROLE>;
 
--- REPORTER: read-only on marts
-GRANT USAGE ON SCHEMA MARKET_MOVERS.ANALYTICS TO ROLE REPORTER;
-GRANT SELECT ON ALL TABLES       IN SCHEMA MARKET_MOVERS.ANALYTICS TO ROLE REPORTER;
-GRANT SELECT ON FUTURE TABLES    IN SCHEMA MARKET_MOVERS.ANALYTICS TO ROLE REPORTER;
-GRANT SELECT ON FUTURE VIEWS     IN SCHEMA MARKET_MOVERS.ANALYTICS TO ROLE REPORTER;
+-- <REPORTER_ROLE>: read-only on marts
+GRANT USAGE ON SCHEMA <DATABASE>.<ANALYTICS_SCHEMA> TO ROLE <REPORTER_ROLE>;
+GRANT SELECT ON ALL TABLES       IN SCHEMA <DATABASE>.<ANALYTICS_SCHEMA> TO ROLE <REPORTER_ROLE>;
+GRANT SELECT ON FUTURE TABLES    IN SCHEMA <DATABASE>.<ANALYTICS_SCHEMA> TO ROLE <REPORTER_ROLE>;
+GRANT SELECT ON FUTURE VIEWS     IN SCHEMA <DATABASE>.<ANALYTICS_SCHEMA> TO ROLE <REPORTER_ROLE>;
 
-GRANT ROLE LOADER, TRANSFORMER, REPORTER TO ROLE SYSADMIN;
+GRANT ROLE <LOADER_ROLE>, <TRANSFORMER_ROLE>, <REPORTER_ROLE> TO ROLE SYSADMIN;
 ```
 
 The three-role split is small effort and it is the thing interviewers ask
@@ -128,17 +128,17 @@ USE ROLE ACCOUNTADMIN;
 CREATE USER IF NOT EXISTS DBT_DEV
   TYPE              = SERVICE
   RSA_PUBLIC_KEY    = '<paste-single-line-key>'
-  DEFAULT_ROLE      = TRANSFORMER
-  DEFAULT_WAREHOUSE = WH_XS;
-GRANT ROLE TRANSFORMER TO USER DBT_DEV;
+  DEFAULT_ROLE      = <TRANSFORMER_ROLE>
+  DEFAULT_WAREHOUSE = <WAREHOUSE>;
+GRANT ROLE <TRANSFORMER_ROLE> TO USER DBT_DEV;
 
 -- GitHub Actions (generate a SECOND key pair for this one)
 CREATE USER IF NOT EXISTS DBT_CI
   TYPE              = SERVICE
   RSA_PUBLIC_KEY    = '<paste-ci-key>'
-  DEFAULT_ROLE      = TRANSFORMER
-  DEFAULT_WAREHOUSE = WH_XS;
-GRANT ROLE TRANSFORMER TO USER DBT_CI;
+  DEFAULT_ROLE      = <TRANSFORMER_ROLE>
+  DEFAULT_WAREHOUSE = <WAREHOUSE>;
+GRANT ROLE <TRANSFORMER_ROLE> TO USER DBT_CI;
 ```
 
 `TYPE = SERVICE` matters — it exempts these users from the MFA prompts that
@@ -170,10 +170,10 @@ market_movers:
       account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
       user: DBT_DEV
       private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
-      role: TRANSFORMER
-      database: MARKET_MOVERS
-      warehouse: WH_XS
-      schema: dbt_dev          # your personal dev schema
+      role: <TRANSFORMER_ROLE>
+      database: <DATABASE>
+      warehouse: <WAREHOUSE>
+      schema: <DEV_SCHEMA>          # your personal dev schema
       threads: 4
       client_session_keep_alive: false
 
@@ -182,10 +182,10 @@ market_movers:
       account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
       user: "{{ env_var('SNOWFLAKE_USER') }}"
       private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}"
-      role: TRANSFORMER
-      database: MARKET_MOVERS
-      warehouse: WH_XS
-      schema: ANALYTICS
+      role: <TRANSFORMER_ROLE>
+      database: <DATABASE>
+      warehouse: <WAREHOUSE>
+      schema: <ANALYTICS_SCHEMA>
       threads: 4
 ```
 
@@ -220,7 +220,7 @@ Most of it ports untouched. The parts that need attention:
 
 | Area | DuckDB | Snowflake |
 |---|---|---|
-| Source data | local file / DuckDB table | `MARKET_MOVERS.RAW` tables |
+| Source data | local file / DuckDB table | `<DATABASE>.RAW` tables |
 | Load step | DuckDB write from Python | `write_pandas` via `snowflake-connector-python` |
 | Identifiers | case-insensitive-ish | UPPERCASE by default — watch quoting |
 | Date functions | DuckDB dialect | `DATEADD`, `DATE_TRUNC`, `TO_DATE` |
@@ -253,7 +253,7 @@ instead of you re-typing them:
 ## Environment
 - venv, not conda. Activate before any dbt command.
 - Always: `dbt build --profiles-dir .`
-- Snowflake target `dev` writes to schema `dbt_dev`. Never run against
+- Snowflake target `dev` writes to schema `<DEV_SCHEMA>`. Never run against
   `prod` locally.
 - Credentials come from env vars. Never write account, user, or key paths
   into tracked files.
@@ -261,7 +261,7 @@ instead of you re-typing them:
 ## Snowflake conventions
 - XS warehouse only. Do not resize.
 - Never `CREATE WAREHOUSE` or alter the resource monitor from code.
-- Models use `TRANSFORMER` role. RAW is read-only from dbt.
+- Models use `<TRANSFORMER_ROLE>` role. RAW is read-only from dbt.
 - Identifiers uppercase; quote only when unavoidable.
 
 ## Cost rules
@@ -277,7 +277,7 @@ pip install snowflake-cli
 snow connection add --connection-name mm \
   --account "$SNOWFLAKE_ACCOUNT" --user DBT_DEV \
   --private-key-file "$SNOWFLAKE_PRIVATE_KEY_PATH" \
-  --role TRANSFORMER --warehouse WH_XS --database MARKET_MOVERS
+  --role <TRANSFORMER_ROLE> --warehouse <WAREHOUSE> --database <DATABASE>
 snow sql -c mm -q "select current_version()"
 ```
 
@@ -304,7 +304,7 @@ after the first week to see actual burn against the estimate.
 2. Run bootstrap SQL (monitor first)
 3. Generate keys, create SERVICE users
 4. `dbt debug` green
-5. Port the Python loader: yfinance → `MARKET_MOVERS.RAW`
+5. Port the Python loader: yfinance → `<DATABASE>.RAW`
 6. `dbt build` green against `dev`
 7. Nightly GitHub Actions job → `prod`, upload `manifest.json` as artifact
 8. Slim CI on PRs with clone + defer

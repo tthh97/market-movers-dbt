@@ -53,7 +53,7 @@ def target() -> str:
 # --------------------------------------------------------------------------
 
 # NB: no CREATE SCHEMA here. RAW is provisioned once by the account bootstrap,
-# and the LOADER role is deliberately granted CREATE TABLE on RAW but *not*
+# and the loader role is deliberately granted CREATE TABLE on RAW but *not*
 # CREATE SCHEMA on the database - the loader writes tables, an admin owns the
 # schema layout. That RBAC split is the point, so the loader must not assume a
 # privilege it isn't meant to have. On DuckDB (offline demo) the schema is
@@ -121,9 +121,9 @@ def _require(name: str) -> str:
     if not value:
         raise SystemExit(
             f"{name} is not set. Snowflake needs SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, "
-            "a credential (SNOWFLAKE_PRIVATE_KEY_PATH or SNOWFLAKE_PASSWORD), and "
-            "optionally SNOWFLAKE_ROLE / _WAREHOUSE / _DATABASE. "
-            "For the offline demo instead, set DBT_TARGET=duckdb."
+            "SNOWFLAKE_ROLE, SNOWFLAKE_WAREHOUSE, SNOWFLAKE_DATABASE and a "
+            "credential (SNOWFLAKE_PRIVATE_KEY_PATH or SNOWFLAKE_PASSWORD). "
+            "See .env.example. For the offline demo instead, set DBT_TARGET=duckdb."
         )
     return value
 
@@ -150,13 +150,16 @@ class _Snowflake:
     def __init__(self) -> None:
         import snowflake.connector
 
-        self.database = os.environ.get("SNOWFLAKE_DATABASE", "MARKET_MOVERS")
+        # No defaults for any identifier. Hardcoding the real database, role or
+        # warehouse would publish the account's layout in a public repo, and a
+        # silent fallback to the wrong role is worse than a loud failure.
+        self.database = _require("SNOWFLAKE_DATABASE")
 
         params = dict(
             account=_require("SNOWFLAKE_ACCOUNT"),
             user=_require("SNOWFLAKE_USER"),
-            role=os.environ.get("SNOWFLAKE_ROLE", "TRANSFORMER"),
-            warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
+            role=_require("SNOWFLAKE_ROLE"),
+            warehouse=_require("SNOWFLAKE_WAREHOUSE"),
             database=self.database,
             autocommit=True,
         )
@@ -268,4 +271,4 @@ def describe() -> str:
     """Human-readable name of the active destination, for log lines."""
     if target() == "duckdb":
         return f"duckdb:{os.path.basename(DUCKDB_PATH)}"
-    return f"snowflake:{os.environ.get('SNOWFLAKE_DATABASE', 'MARKET_MOVERS')}.raw.prices"
+    return f"snowflake:{os.environ.get('SNOWFLAKE_DATABASE', '<database>')}.raw.prices"

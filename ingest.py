@@ -34,6 +34,25 @@ def tickers() -> list[str]:
         return [r["ticker"] for r in csv.DictReader(f)]
 
 
+def _num(value, fallback=None):
+    """Coerce a yfinance cell to a real number, or fall back.
+
+    yfinance returns NaN for sessions that never settled - halts, holidays it
+    got wrong, or a partial current bar - and it does so inconsistently, so the
+    same request can be clean locally and carry NaN from a CI runner. A NaN
+    float is rendered into SQL as the bare token NaN, which the warehouse then
+    rejects as an unknown identifier, failing the whole batch. Note that
+    `dict.get(key, default)` does not help: the column is present, its value is
+    simply NaN.
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    # NaN is the only value not equal to itself.
+    return f if f == f else fallback
+
+
 def fetch(ticker: str, period: str) -> list[tuple]:
     """One ticker at a time keeps the columns single-indexed and simple."""
     df = yf.download(
@@ -50,18 +69,30 @@ def fetch(ticker: str, period: str) -> list[tuple]:
 
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     rows = []
+    skipped = 0
     for idx, r in df.iterrows():
         trade_date = idx.date() if hasattr(idx, "date") else idx
-        close = float(r.get("Close"))
-        adj = r.get("Adj Close", close)
+
+        # Close anchors the bar: every other price falls back to it, so a row
+        # without one carries no information. Drop it rather than invent a
+        # price - a fabricated close would flow straight into the returns and
+        # momentum marts and be indistinguishable from a real one.
+        close = _num(r.get("Close"))
+        if close is None:
+            skipped += 1
+            continue
+
         rows.append((
             ticker, trade_date,
-            float(r.get("Open", close)), float(r.get("High", close)),
-            float(r.get("Low", close)), close,
-            float(adj if adj == adj else close),  # NaN-guard
-            int(r.get("Volume", 0) or 0),
+            _num(r.get("Open"), close), _num(r.get("High"), close),
+            _num(r.get("Low"), close), close,
+            _num(r.get("Adj Close"), close),
+            int(_num(r.get("Volume"), 0)),
             "yfinance", now,
         ))
+
+    if skipped:
+        print(f"  ! {ticker}: skipped {skipped} row(s) with no usable close")
     return rows
 
 
