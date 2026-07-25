@@ -50,9 +50,17 @@ jobs:
       - name: Build and test models
         run: dbt build --profiles-dir .
 
-  # Stage 2 - the real nightly refresh against Snowflake. This is the run whose
-  # failure matters, so the assisted-triage chain hangs off this job only;
-  # duplicating it on stage 1 would open two issues for one problem.
+      # Only on failure - this is what the triage job diagnoses. A green offline
+      # run has nothing worth keeping.
+      - name: Upload dbt target (offline)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dbt-target-duckdb
+          path: target/
+          retention-days: 14
+
+  # Stage 2 - the real nightly refresh against Snowflake.
   build-snowflake:
     runs-on: ubuntu-latest
     needs: build-duckdb
@@ -104,56 +112,6 @@ jobs:
           SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
         run: dbt build --profiles-dir .
 
-      # Assisted-triage step 1 (capture, no AI): on a failed build, turn dbt's
-      # own artifacts into one curated failure_context.json for later diagnosis.
-      - name: Capture failure context
-        if: failure()
-        run: python scripts/capture_failure.py
-
-      - name: Upload failure context
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: failure-context
-          path: failure_context.json
-          retention-days: 14
-
-      # Assisted-triage step 2 (diagnose): one Claude API call turns the failure
-      # context into a proposed diagnosis with safety flags. Skips itself if the
-      # ANTHROPIC_API_KEY secret is not set; a human approves any fix.
-      - name: Diagnose failure (Claude API)
-        if: failure()
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python scripts/diagnose_failure.py
-
-      - name: Upload diagnosis
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: diagnosis
-          path: diagnosis.json
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # Assisted-triage step 3 (propose): turn the diagnosis into a human-approval
-      # GitHub issue so someone is actually notified, instead of having to dig
-      # through Actions artifacts. It PROPOSES; a human approves. Never self-edits.
-      - name: Propose fix (open issue)
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/propose_fix.py
-
-      - name: Upload proposed fix
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: proposed-fix
-          path: proposed_fix_issue.md
-          if-no-files-found: ignore
-          retention-days: 14
-
       - name: Generate docs
         env:
           SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE_TRANSFORMER }}
@@ -164,6 +122,81 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: dbt-target
+          name: dbt-target-snowflake
           path: target/
+          retention-days: 14
+
+  # Stage 3 - assisted triage. Its own job, fired by `failure()`, so it runs for
+  # whichever stage broke. This has to be a separate job: build-snowflake is
+  # SKIPPED when build-duckdb fails, so a triage chain nested inside
+  # build-snowflake would never run for a SQL or test regression - exactly the
+  # class of failure it explains best. It PROPOSES; a human approves. It never
+  # edits code and never self-heals.
+  triage:
+    runs-on: ubuntu-latest
+    needs: [build-duckdb, build-snowflake]
+    if: failure()
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Whichever stage failed uploaded its target/. Only one can exist: the
+      # gate means a duckdb failure skips snowflake, and duckdb uploads only on
+      # failure. If neither produced one, capture_failure.py reports
+      # "no_run_results" and says the failure happened before dbt ran.
+      - name: Fetch dbt artifacts from the failed stage
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          pattern: dbt-target-*
+          merge-multiple: true
+          path: target
+
+      # Step 1 (capture, no AI): turn dbt's own artifacts into one curated
+      # failure_context.json for later diagnosis.
+      - name: Capture failure context
+        run: python scripts/capture_failure.py
+
+      - name: Upload failure context
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: failure-context
+          path: failure_context.json
+          retention-days: 14
+
+      # Step 2 (diagnose): one Claude API call turns the failure context into a
+      # proposed diagnosis with safety flags. Skips itself if the
+      # ANTHROPIC_API_KEY secret is not set.
+      - name: Diagnose failure (Claude API)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/diagnose_failure.py
+
+      - name: Upload diagnosis
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: diagnosis
+          path: diagnosis.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Step 3 (propose): turn the diagnosis into a human-approval GitHub issue
+      # so someone is actually notified, instead of digging through artifacts.
+      - name: Propose fix (open issue)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/propose_fix.py
+
+      - name: Upload proposed fix
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: proposed-fix
+          path: proposed_fix_issue.md
+          if-no-files-found: ignore
           retention-days: 14
