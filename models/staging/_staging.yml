@@ -20,7 +20,7 @@ models:
         tests:
           - accepted_values:
               arguments:
-                values: ["tech", "industrials", "financials", "benchmark"]
+                values: ["tech", "industrials", "financials", "crypto", "benchmark"]
       - name: asset_class
         tests:
           - accepted_values:
