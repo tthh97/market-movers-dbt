@@ -15,32 +15,89 @@ permissions:
   contents: read
   issues: write
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+# One refresh at a time. Two overlapping runs would race on the same Snowflake
+# tables, and a slow run must not be cancelled halfway through a MERGE.
+concurrency:
+  group: daily-refresh
+  cancel-in-progress: false
 
-    # Snowflake is the default target in profiles.yml, but CI has no Snowflake
-    # credentials, so the nightly stays on the offline DuckDB path. Set at job
-    # level so ingest, build and docs generate all agree - a per-step env is one
-    # forgotten step away from a half-Snowflake run. To move the nightly to
-    # Snowflake: add the SNOWFLAKE_* secrets, then drop this block.
+# Third-party actions are pinned to commit SHAs, not tags. A tag is mutable: if
+# it were ever moved, the new code would run inside the job that holds the
+# Snowflake key. The trailing comment records the human-readable version.
+jobs:
+  # Stage 1 - offline logic check. No credentials, no network, no warehouse
+  # spend. The synthetic seed exercises every model and all 26 tests, so a red
+  # build here is always a real SQL or schema regression rather than a data or
+  # connectivity problem. It gates stage 2 so a known-broken pipeline never
+  # burns Snowflake credits.
+  build-duckdb:
+    runs-on: ubuntu-latest
     env:
       DBT_TARGET: duckdb
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Ingest latest prices
-        run: python ingest.py --period 6mo
+      - name: Seed synthetic sample
+        run: python scripts/seed_sample.py
 
       - name: Build and test models
+        run: dbt build --profiles-dir .
+
+  # Stage 2 - the real nightly refresh against Snowflake. This is the run whose
+  # failure matters, so the assisted-triage chain hangs off this job only;
+  # duplicating it on stage 1 would open two issues for one problem.
+  build-snowflake:
+    runs-on: ubuntu-latest
+    needs: build-duckdb
+    env:
+      DBT_TARGET: snowflake
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_WAREHOUSE: COMPUTE_WH
+      SNOWFLAKE_DATABASE: MARKET_MOVERS
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # The connector wants the key as a file. Write it under RUNNER_TEMP, which
+      # is wiped when the job ends, with umask 077 so it is never group- or
+      # world-readable. The secret is passed through env rather than
+      # interpolated into the script body, so its contents can never be parsed
+      # as shell.
+      - name: Write Snowflake private key
+        env:
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$SNOWFLAKE_PRIVATE_KEY" > "$RUNNER_TEMP/sf_ci_key.p8"
+          echo "SNOWFLAKE_PRIVATE_KEY_PATH=$RUNNER_TEMP/sf_ci_key.p8" >> "$GITHUB_ENV"
+
+      # Least privilege, enforced per step: LOADER may write RAW but cannot read
+      # ANALYTICS; TRANSFORMER may read RAW and build ANALYTICS but cannot write
+      # RAW. Neither can reach ACCOUNTADMIN - the CI user is a SERVICE user with
+      # DEFAULT_SECONDARY_ROLES = ().
+      - name: Ingest latest prices (LOADER)
+        env:
+          SNOWFLAKE_ROLE: LOADER
+        run: python ingest.py --period 6mo
+
+      - name: Build and test models (TRANSFORMER)
+        env:
+          SNOWFLAKE_ROLE: TRANSFORMER
+          SNOWFLAKE_SCHEMA: ANALYTICS
         run: dbt build --profiles-dir .
 
       # Assisted-triage step 1 (capture, no AI): on a failed build, turn dbt's
@@ -51,7 +108,7 @@ jobs:
 
       - name: Upload failure context
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: failure-context
           path: failure_context.json
@@ -68,7 +125,7 @@ jobs:
 
       - name: Upload diagnosis
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: diagnosis
           path: diagnosis.json
@@ -86,7 +143,7 @@ jobs:
 
       - name: Upload proposed fix
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: proposed-fix
           path: proposed_fix_issue.md
@@ -94,11 +151,14 @@ jobs:
           retention-days: 14
 
       - name: Generate docs
+        env:
+          SNOWFLAKE_ROLE: TRANSFORMER
+          SNOWFLAKE_SCHEMA: ANALYTICS
         run: dbt docs generate --profiles-dir .
 
       - name: Upload dbt target (docs + run results)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dbt-target
           path: target/
