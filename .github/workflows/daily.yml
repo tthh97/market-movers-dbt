@@ -161,7 +161,7 @@ jobs:
       # Step 1 (capture, no AI): turn dbt's own artifacts into one curated
       # failure_context.json for later diagnosis.
       - name: Capture failure context
-        run: python scripts/capture_failure.py
+        run: python scripts/triage/capture_failure.py
 
       - name: Upload failure context
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -176,7 +176,7 @@ jobs:
       - name: Diagnose failure (Claude API)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python scripts/diagnose_failure.py
+        run: python scripts/triage/diagnose_failure.py
 
       - name: Upload diagnosis
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -191,7 +191,7 @@ jobs:
       - name: Propose fix (open issue)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/propose_fix.py
+        run: python scripts/triage/propose_fix.py
 
       - name: Upload proposed fix
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

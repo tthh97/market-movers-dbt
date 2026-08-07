@@ -8,8 +8,8 @@ a diagnosis; a human approves any fix. Keep this file pure-stdlib so it runs on
 the CI runner with no extra installs.
 
 Usage (locally or in CI, after a dbt build):
-    python3 scripts/capture_failure.py
-    python3 scripts/capture_failure.py --out failure_context.json
+    python3 scripts/triage/capture_failure.py
+    python3 scripts/triage/capture_failure.py --out failure_context.json
 
 Exit code is always 0: capture is a reporting step, not a gate. It writes a
 context file describing whatever it found (including "dbt never ran").
