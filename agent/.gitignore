@@ -1,0 +1,6 @@
+.venv/
+.env
+traces/
+memory.json
+__pycache__/
+*.pyc
