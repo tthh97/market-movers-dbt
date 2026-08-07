@@ -8,6 +8,10 @@ pandas>=2.0
 dbt-duckdb>=1.9,<2.0
 duckdb>=1.0
 
-# Assisted-triage diagnosis step (scripts/diagnose_failure.py)
+# Two Claude API callers share these: the assisted-triage diagnosis step
+# (scripts/diagnose_failure.py) and the analytics agent (agent/). The agent also
+# needs snowflake-connector-python, already pinned above. Kept in one file
+# deliberately - a second requirements.txt under agent/ drifted to a weaker
+# anthropic pin within a single release cycle.
 anthropic>=0.70
 python-dotenv>=1.0

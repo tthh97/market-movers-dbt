@@ -1,16 +1,27 @@
-# market-agent
+# The analytics agent
 
-A read-only analytics agent over the `market-movers-dbt` Snowflake warehouse. Ask
-it a question in English; it writes SQL, runs it, and explains the result.
+A read-only analytics agent over this project's Snowflake warehouse. Ask it a
+question in English; it writes SQL, runs it, and explains the result.
 
 It is the interactive third layer of the project, alongside the dbt pipeline and
 the CI triage bot. All three share one rule: **they propose and describe, they
 never write.**
 
 ```bash
-python3 agent.py "which sector moved most on the latest trading day?"
-python3 evals.py          # 12 golden questions, expectations computed live
+cd agent
+../.venv/bin/python agent.py "which sector moved most on the latest trading day?"
+../.venv/bin/python evals.py    # 12 golden questions, expectations computed live
 ```
+
+Run from this directory. `agent.py` and `evals.py` resolve both `.env` and their
+sibling imports relative to their own file location, so the working directory has
+to be `agent/`.
+
+The root `requirements.txt` is a superset of what the agent needs, so the
+project venv runs both the pipeline and the agent. The `.env` is **not** shared:
+the agent connects as a dedicated read-only identity, never the transformer role
+that builds the marts, and keeping the two credential files apart makes that
+boundary a visible thing rather than a convention.
 
 ## The harness
 
