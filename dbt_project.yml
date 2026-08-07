@@ -10,6 +10,13 @@ test-paths: ["tests"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
+vars:
+  # How far back the fct_prices incremental scan reaches from its high-water
+  # mark, so late-arriving and corrected rows have somewhere to land. Anything
+  # older than this is still dropped silently by the filter, which is what
+  # assert_fct_prices_complete exists to make loud. ~570 rows at 30 days here.
+  fct_prices_lookback_days: 30
+
 models:
   market_movers:
     # Folder names carry the build order: staging -> fact -> intermediate -> marts.
