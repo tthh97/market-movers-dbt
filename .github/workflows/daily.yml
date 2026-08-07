@@ -7,7 +7,23 @@ on:
     # recent settled close: Mon picks up Friday, Tue-Fri pick up the prior
     # weekday. Every session lands exactly once, one day behind.
     - cron: "0 8 * * 1-5"
-  workflow_dispatch: {}
+  # A fault is a dispatch input rather than a long-lived demo branch. The three
+  # demo/* branches this replaces had to be rebased after every structural
+  # change, drifted stale, and left an open PR that put an intentional break one
+  # click from main - PR #7 was merged by accident on 2026-07-26 and reverted in
+  # 258fd50. An input cannot be merged.
+  workflow_dispatch:
+    inputs:
+      inject_fault:
+        description: "Break stage 1 on purpose, to demo the triage layer"
+        type: choice
+        required: false
+        default: none
+        options:
+          - none
+          - accepted_values   # test failure: a sector outside the allowed list
+          - dup_ticker        # test failure: a duplicate key in the watchlist
+          - renamed_column    # build failure: a model stops compiling
 
 # The assisted-triage step 3 opens a GitHub issue on failure, which needs write
 # access to issues. Everything else is read-only.
@@ -43,6 +59,14 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      # Demo only, and only when asked for by hand. A scheduled run never reaches
+      # this step, because `inputs` is empty for a schedule event. The fault goes
+      # into stage 1 alone: it fails there, which gates stage 2 off, so the whole
+      # demo costs nothing on Snowflake.
+      - name: Inject a deliberate fault
+        if: inputs.inject_fault != '' && inputs.inject_fault != 'none'
+        run: python scripts/inject_fault.py "${{ inputs.inject_fault }}"
 
       - name: Seed synthetic sample
         run: python scripts/seed_sample.py
@@ -161,7 +185,7 @@ jobs:
       # Step 1 (capture, no AI): turn dbt's own artifacts into one curated
       # failure_context.json for later diagnosis.
       - name: Capture failure context
-        run: python scripts/capture_failure.py
+        run: python scripts/triage/capture_failure.py
 
       - name: Upload failure context
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -176,7 +200,7 @@ jobs:
       - name: Diagnose failure (Claude API)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python scripts/diagnose_failure.py
+        run: python scripts/triage/diagnose_failure.py
 
       - name: Upload diagnosis
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -191,7 +215,7 @@ jobs:
       - name: Propose fix (open issue)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python scripts/propose_fix.py
+        run: python scripts/triage/propose_fix.py
 
       - name: Upload proposed fix
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

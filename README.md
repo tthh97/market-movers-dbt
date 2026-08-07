@@ -68,19 +68,29 @@ python -c "import duckdb; print(duckdb.connect('market.duckdb').sql('select * fr
 
 ## Project layout
 
+Model folders are numbered in build order, because the layer names alone did not
+predict it: `fct_prices` is a fact table but builds *before* the intermediate
+models, since everything downstream reads from it rather than from staging.
+
 ```
+.github/workflows/daily.yml   # the only entry point: offline check -> Snowflake refresh -> triage
 ingest.py                     # real yfinance → raw.prices (idempotent)
+warehouse.py                  # shared connection helper, so loader and models agree on the target
 scripts/seed_sample.py        # synthetic → raw.prices (offline/demo)
-scripts/_triage_common.py     # shared JSON-load/skip helpers for the triage scripts
-scripts/capture_failure.py    # on a failed build, writes failure_context.json (no AI, session 1)
-scripts/diagnose_failure.py   # one Claude API call → proposed diagnosis (session 2)
-scripts/propose_fix.py        # surfaces the diagnosis for human approval, opens a GitHub issue in CI (session 3)
-seeds/watchlist.csv           # the tracked universe + holding/benchmark flags
-models/staging/               # stg_prices, stg_watchlist, sources + freshness
-models/intermediate/          # int_daily_returns, int_latest_daily_returns
-models/marts/                 # fct_prices, mart_movers, mart_momentum, mart_portfolio_bias, mart_sector_overview
-tests/                        # singular test: no non-positive close prices
-.github/workflows/daily.yml   # nightly: offline check -> Snowflake refresh -> triage on failure
+scripts/inject_fault.py       # breaks the build on purpose, to demo triage (CI-guarded)
+
+seeds/watchlist.csv           # node 1  - the tracked universe + holding/benchmark flags
+models/01_staging/            # nodes 4-13  - stg_prices, stg_watchlist, sources + freshness
+models/02_fact/               # node 14     - fct_prices, the incremental history everything reads
+models/03_intermediate/       # nodes 18-23 - int_daily_returns, int_latest_daily_returns
+models/04_marts/              # nodes 24-36 - mart_movers, mart_momentum, mart_portfolio_bias, mart_sector_overview
+tests/                        # node 6      - singular test: no non-positive close prices
+
+scripts/triage/               # runs only when a build fails:
+  _triage_common.py           #   shared JSON-load/skip helpers
+  capture_failure.py          #   writes failure_context.json (no AI, session 1)
+  diagnose_failure.py         #   one Claude API call → proposed diagnosis (session 2)
+  propose_fix.py              #   opens a human-approval GitHub issue in CI (session 3)
 ```
 
 ## Design choices worth talking through
@@ -97,10 +107,10 @@ tests/                        # singular test: no non-positive close prices
   `relationships` FK from the fact to the watchlist, and a singular no-negative-close
   test - plus source-freshness thresholds.
 - **Assisted-triage on failure.** When the nightly `dbt build` fails, three
-  failure-only CI steps run in sequence: `scripts/capture_failure.py` (no AI) turns
-  dbt's artifacts into one clean `failure_context.json`; `scripts/diagnose_failure.py`
+  failure-only CI steps run in sequence: `scripts/triage/capture_failure.py` (no AI) turns
+  dbt's artifacts into one clean `failure_context.json`; `scripts/triage/diagnose_failure.py`
   makes a single Claude API call for a **structured** diagnosis (likely cause,
-  proposed fix, confidence, and safety flags); `scripts/propose_fix.py` surfaces that
+  proposed fix, confidence, and safety flags); `scripts/triage/propose_fix.py` surfaces that
   diagnosis as a GitHub issue so a human is actually notified. It proposes; a human
   approves. Set `ANTHROPIC_API_KEY` (a `.env` locally - see `.env.example` - or a CI
   secret); the diagnosis step skips cleanly if it's unset. Never auto-fixes, never
@@ -111,40 +121,48 @@ tests/                        # singular test: no non-positive close prices
 
 ## Demo: watch the triage layer catch, diagnose, and propose a fix
 
-The assisted-triage layer is easiest to believe when you see it fire. Three demo
-branches each carry one realistic fault, so `main` always stays green:
+The assisted-triage layer is easiest to believe when you see it fire. Three
+realistic faults can be injected on demand, so `main` stays green and no fault
+ever lives on a branch:
 
-| Branch | Fault | Test that catches it |
+| Fault | What it simulates | Test that catches it |
 | --- | --- | --- |
-| `demo/triage` | `sector` accepted-values list narrowed to drop `crypto`, so BTC-USD, ETH-USD and SOL-USD fail. Data drift: the warehouse gained a category the contract was never told about. | `accepted_values_stg_watchlist_sector` |
-| `demo/dup-ticker` | A second NVDA row in the watchlist. Upstream fault: the same instrument arriving twice from a source with no key. | `unique_stg_watchlist_ticker` |
-| `demo/renamed-column` | `int_daily_returns` selects `closing_price`, which `fct_prices` does not have. Schema drift: an upstream rename nobody propagated. | none - it errors at build time |
+| `accepted_values` | `sector` accepted-values list narrowed to drop `crypto`, so BTC-USD, ETH-USD and SOL-USD fail. Data drift: the warehouse gained a category the contract was never told about. | `accepted_values_stg_watchlist_sector` |
+| `dup_ticker` | A second NVDA row in the watchlist. Upstream fault: the same instrument arriving twice from a source with no key. | `unique_stg_watchlist_ticker` |
+| `renamed_column` | `int_daily_returns` renames a column mid-CTE, so the outer select references one that no longer exists. Schema drift: an upstream rename nobody propagated. | none - it errors at build time |
+
+This used to be three long-lived `demo/*` branches. They had to be rebased after
+every structural change, drifted stale, and left an open PR that put an
+intentional break one click from `main`. That is not hypothetical: PR #7 was
+merged by accident and had to be reverted. A dispatch input cannot be merged.
 
 ### Run it locally (about two minutes)
 
 ```bash
-git switch demo/triage                                 # the branch that carries the fault
-DBT_TARGET=duckdb python scripts/seed_sample.py        # offline, no credentials
-DBT_TARGET=duckdb dbt build --profiles-dir .           # RED:  PASS=22 ERROR=1 SKIP=13
-python scripts/capture_failure.py                      # writes failure_context.json (no AI)
-python scripts/diagnose_failure.py                     # one Claude call -> diagnosis.json
-python scripts/propose_fix.py                          # renders the human-approval report
+python scripts/inject_fault.py accepted_values --force  # breaks your working tree
+DBT_TARGET=duckdb python scripts/seed_sample.py         # offline, no credentials
+DBT_TARGET=duckdb dbt build --profiles-dir .            # RED:  PASS=22 ERROR=1 SKIP=13
+python scripts/triage/capture_failure.py                # writes failure_context.json (no AI)
+python scripts/triage/diagnose_failure.py               # one Claude call -> diagnosis.json
+python scripts/triage/propose_fix.py                    # renders the human-approval report
+git checkout -- .                                       # undo the fault
 ```
 
-Then apply the proposed fix (add `crypto` back to the list in
-`models/staging/_staging.yml`) and rebuild to confirm green:
+`--force` is required locally because the script edits tracked files in place.
+CI does not need it, since `CI` is already set there. If the anchor text it
+looks for has moved, the script exits non-zero rather than doing nothing: a
+silent no-op would produce a green build and look like triage had missed a fault
+that was never actually injected.
 
-```bash
-DBT_TARGET=duckdb dbt build --profiles-dir .           # GREEN: PASS=36
-```
+Applying the proposed fix instead of `git checkout` rebuilds green at `PASS=36`.
 
 ### Run it in CI (opens a real GitHub issue)
 
-With `ANTHROPIC_API_KEY` set as a repo secret, dispatch the nightly workflow on a
-demo branch:
+With `ANTHROPIC_API_KEY` set as a repo secret, dispatch the nightly workflow and
+pick a fault:
 
 ```bash
-gh workflow run daily.yml --ref demo/triage
+gh workflow run daily.yml -f inject_fault=accepted_values
 ```
 
 The run shows the whole shape of the pipeline in one place:
@@ -161,12 +179,16 @@ touched by a build already known to be broken.
 **Live examples**, both auto-authored by `github-actions`, each carrying a structured
 diagnosis, a confidence level, safety flags, and a human-approval checklist:
 
-- `demo/triage` → [issue #6](https://github.com/tthh97/market-movers-dbt/issues/6)
+- `accepted_values` → [issue #6](https://github.com/tthh97/market-movers-dbt/issues/6)
   from [this run](https://github.com/tthh97/market-movers-dbt/actions/runs/30170585086)
-- `demo/dup-ticker` → [issue #9](https://github.com/tthh97/market-movers-dbt/issues/9)
+- `dup_ticker` → [issue #9](https://github.com/tthh97/market-movers-dbt/issues/9)
   from [this run](https://github.com/tthh97/market-movers-dbt/actions/runs/30170684064)
-- `demo/renamed-column` → [issue #10](https://github.com/tthh97/market-movers-dbt/issues/10)
+- `renamed_column` → [issue #10](https://github.com/tthh97/market-movers-dbt/issues/10)
   from [this run](https://github.com/tthh97/market-movers-dbt/actions/runs/30171213913)
+
+Those runs predate the switch to injected faults and were dispatched from the
+old demo branches. The fault is identical either way, and everything from
+`capture_failure.py` onward is unchanged.
 
 
 The first two are test failures (`PASS=22 ERROR=1 SKIP=13`); the third errors at

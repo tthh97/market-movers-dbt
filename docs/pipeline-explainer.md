@@ -122,7 +122,7 @@ Before this session, a failed test just turned the nightly run red and nothing
 else happened. Now there is an incident desk.
 
 When `dbt build` fails, a GitHub Actions step that runs **only on failure**
-(`if: failure()`) calls `scripts/capture_failure.py`. That script does **no AI
+(`if: failure()`) calls `scripts/triage/capture_failure.py`. That script does **no AI
 and no fixing**. It reads dbt's own artifacts (`run_results.json` +
 `manifest.json`) and writes **one clean `failure_context.json`**: for each failed
 node it records the name, the rule it broke, the error message, the number of
@@ -133,7 +133,7 @@ artifact.
 testable code) from "propose a fix" (the AI step) keeps the trustworthy part
 trustworthy.
 
-Then the senior engineer reads the report: `scripts/diagnose_failure.py` (the
+Then the senior engineer reads the report: `scripts/triage/diagnose_failure.py` (the
 only step that calls the Claude API) sends **just** that `failure_context.json` -
 not the whole repo - and gets back one **structured** diagnosis: the failing
 model, the likely cause, a proposed fix, a `confidence` level, and two safety
@@ -149,7 +149,7 @@ nothing to the repo, and prints the proposal for a human. This is assisted triag
 You can trigger the whole capture flow locally in under a minute. Two easy breaks:
 
 **Option A - narrow an accepted-values rule** (a realistic data-drift failure):
-in `models/staging/_staging.yml`, remove `"crypto"` from the `sector`
+in `models/01_staging/_staging.yml`, remove `"crypto"` from the `sector`
 `accepted_values` list. The three crypto tickers now violate the rule.
 
 **Option B - a throwaway singular test:** create `tests/tmp_force_fail.sql`
@@ -159,7 +159,7 @@ Then run the build and the capture:
 
 ```bash
 .venv/bin/dbt build --profiles-dir .          # exits non-zero: tests fail
-.venv/bin/python scripts/capture_failure.py   # writes failure_context.json
+.venv/bin/python scripts/triage/capture_failure.py   # writes failure_context.json
 ```
 
 Real output from this exact demo (abridged) - the `accepted_values` break:
@@ -177,7 +177,7 @@ Real output from this exact demo (abridged) - the `accepted_values` break:
       "status": "fail",
       "num_failing_rows": 1,
       "message": "Got 1 result, configured to fail if != 0",
-      "original_file_path": "models/staging/_staging.yml",
+      "original_file_path": "models/01_staging/_staging.yml",
       "test_metadata": {
         "name": "accepted_values",
         "kwargs": { "column_name": "sector", "values": ["tech","industrials","financials","benchmark"] }
@@ -198,7 +198,7 @@ To get the AI's proposed diagnosis from that report, run the session-2 step (nee
 an `ANTHROPIC_API_KEY` in a local `.env` - copy `.env.example`):
 
 ```bash
-python3 scripts/diagnose_failure.py   # one call; prints + writes diagnosis.json
+python3 scripts/triage/diagnose_failure.py   # one call; prints + writes diagnosis.json
 ```
 
 It returns the structured diagnosis with `confidence` and the two safety flags,

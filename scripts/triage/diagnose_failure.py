@@ -1,7 +1,7 @@
 """
 Session 2 of the assisted-triage layer: DIAGNOSE (the only AI step).
 
-Reads the curated failure_context.json produced by scripts/capture_failure.py and
+Reads the curated failure_context.json produced by scripts/triage/capture_failure.py and
 asks the Claude API for a single, structured diagnosis with safety flags. It
 PROPOSES; a human approves. It never edits models, never writes to the warehouse,
 never opens a PR. Output is printed and written to diagnosis.json (git-ignored,
@@ -14,8 +14,8 @@ Design guarantees (see docs/pipeline-explainer.md and the build guideline):
     failed - so the CI job never breaks just because triage had nothing to do.
 
 Usage:
-    python3 scripts/diagnose_failure.py
-    python3 scripts/diagnose_failure.py --in failure_context.json --out diagnosis.json
+    python3 scripts/triage/diagnose_failure.py
+    python3 scripts/triage/diagnose_failure.py --in failure_context.json --out diagnosis.json
 """
 
 from __future__ import annotations

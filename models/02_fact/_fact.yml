@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: fct_prices
+    description: >
+      Incremental fact of daily prices. Grain = one row per ticker per trading day.
+      Sits between staging and the intermediate layer: everything downstream reads
+      from here rather than from stg_prices, so the folder order reflects the build
+      order rather than the layer name.
+    columns:
+      - name: price_key
+        description: Surrogate key, ticker + trade_date.
+        tests: [not_null, unique]
+      - name: ticker
+        description: Foreign key to the watchlist.
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_watchlist')
+                field: ticker

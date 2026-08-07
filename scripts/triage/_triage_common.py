@@ -11,7 +11,10 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+# scripts/triage/ -> scripts/ -> repo root. Two levels, not one: these scripts
+# read and write artifacts (target/, failure_context.json, diagnosis.json) that
+# live at the project root, so this must not drift when the folder moves.
+ROOT = os.path.dirname(os.path.dirname(HERE))
 
 
 def load_json(path: str) -> dict | None:
