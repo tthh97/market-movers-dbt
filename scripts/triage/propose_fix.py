@@ -1,8 +1,8 @@
 """
 Session 3 of the assisted-triage layer: PROPOSE (surface the diagnosis to a human).
 
-Reads diagnosis.json (from scripts/diagnose_failure.py) and failure_context.json
-(from scripts/capture_failure.py) and renders one human-approval report. It PROPOSES
+Reads diagnosis.json (from scripts/triage/diagnose_failure.py) and failure_context.json
+(from scripts/triage/capture_failure.py) and renders one human-approval report. It PROPOSES
 a fix a human reviews and approves - it NEVER edits models, writes to the warehouse,
 or opens a pull request.
 
@@ -18,8 +18,8 @@ Design guarantees (mirrors capture/diagnose):
     was unset so no diagnosis was produced).
 
 Usage:
-    python3 scripts/propose_fix.py
-    python3 scripts/propose_fix.py --diagnosis diagnosis.json --context failure_context.json
+    python3 scripts/triage/propose_fix.py
+    python3 scripts/triage/propose_fix.py --diagnosis diagnosis.json --context failure_context.json
 """
 
 from __future__ import annotations

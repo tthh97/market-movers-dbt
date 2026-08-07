@@ -12,11 +12,19 @@ clean-targets: ["target", "dbt_packages"]
 
 models:
   market_movers:
-    staging:
+    # Folder names carry the build order: staging -> fact -> intermediate -> marts.
+    # fct_prices previously sat under marts/ but builds before both intermediate
+    # models, so the folder name contradicted the DAG. Numbering settles it.
+    # Quoted because a bare 01_staging is ambiguous to a YAML reader.
+    "01_staging":
       +materialized: view
-    intermediate:
+    "02_fact":
+      # fct_prices overrides this with materialized="incremental" in its own
+      # config block; this is only the fallback for anything else added here.
+      +materialized: table
+    "03_intermediate":
       +materialized: view
-    marts:
+    "04_marts":
       +materialized: table
 
 seeds:

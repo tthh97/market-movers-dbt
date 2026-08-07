@@ -68,19 +68,28 @@ python -c "import duckdb; print(duckdb.connect('market.duckdb').sql('select * fr
 
 ## Project layout
 
+Model folders are numbered in build order, because the layer names alone did not
+predict it: `fct_prices` is a fact table but builds *before* the intermediate
+models, since everything downstream reads from it rather than from staging.
+
 ```
+.github/workflows/daily.yml   # the only entry point: offline check -> Snowflake refresh -> triage
 ingest.py                     # real yfinance → raw.prices (idempotent)
+warehouse.py                  # shared connection helper, so loader and models agree on the target
 scripts/seed_sample.py        # synthetic → raw.prices (offline/demo)
-scripts/_triage_common.py     # shared JSON-load/skip helpers for the triage scripts
-scripts/capture_failure.py    # on a failed build, writes failure_context.json (no AI, session 1)
-scripts/diagnose_failure.py   # one Claude API call → proposed diagnosis (session 2)
-scripts/propose_fix.py        # surfaces the diagnosis for human approval, opens a GitHub issue in CI (session 3)
-seeds/watchlist.csv           # the tracked universe + holding/benchmark flags
-models/staging/               # stg_prices, stg_watchlist, sources + freshness
-models/intermediate/          # int_daily_returns, int_latest_daily_returns
-models/marts/                 # fct_prices, mart_movers, mart_momentum, mart_portfolio_bias, mart_sector_overview
-tests/                        # singular test: no non-positive close prices
-.github/workflows/daily.yml   # nightly: offline check -> Snowflake refresh -> triage on failure
+
+seeds/watchlist.csv           # node 1  - the tracked universe + holding/benchmark flags
+models/01_staging/            # nodes 4-13  - stg_prices, stg_watchlist, sources + freshness
+models/02_fact/               # node 14     - fct_prices, the incremental history everything reads
+models/03_intermediate/       # nodes 18-23 - int_daily_returns, int_latest_daily_returns
+models/04_marts/              # nodes 24-36 - mart_movers, mart_momentum, mart_portfolio_bias, mart_sector_overview
+tests/                        # node 6      - singular test: no non-positive close prices
+
+scripts/triage/               # runs only when a build fails:
+  _triage_common.py           #   shared JSON-load/skip helpers
+  capture_failure.py          #   writes failure_context.json (no AI, session 1)
+  diagnose_failure.py         #   one Claude API call → proposed diagnosis (session 2)
+  propose_fix.py              #   opens a human-approval GitHub issue in CI (session 3)
 ```
 
 ## Design choices worth talking through
@@ -97,10 +106,10 @@ tests/                        # singular test: no non-positive close prices
   `relationships` FK from the fact to the watchlist, and a singular no-negative-close
   test - plus source-freshness thresholds.
 - **Assisted-triage on failure.** When the nightly `dbt build` fails, three
-  failure-only CI steps run in sequence: `scripts/capture_failure.py` (no AI) turns
-  dbt's artifacts into one clean `failure_context.json`; `scripts/diagnose_failure.py`
+  failure-only CI steps run in sequence: `scripts/triage/capture_failure.py` (no AI) turns
+  dbt's artifacts into one clean `failure_context.json`; `scripts/triage/diagnose_failure.py`
   makes a single Claude API call for a **structured** diagnosis (likely cause,
-  proposed fix, confidence, and safety flags); `scripts/propose_fix.py` surfaces that
+  proposed fix, confidence, and safety flags); `scripts/triage/propose_fix.py` surfaces that
   diagnosis as a GitHub issue so a human is actually notified. It proposes; a human
   approves. Set `ANTHROPIC_API_KEY` (a `.env` locally - see `.env.example` - or a CI
   secret); the diagnosis step skips cleanly if it's unset. Never auto-fixes, never
@@ -126,13 +135,13 @@ branches each carry one realistic fault, so `main` always stays green:
 git switch demo/triage                                 # the branch that carries the fault
 DBT_TARGET=duckdb python scripts/seed_sample.py        # offline, no credentials
 DBT_TARGET=duckdb dbt build --profiles-dir .           # RED:  PASS=22 ERROR=1 SKIP=13
-python scripts/capture_failure.py                      # writes failure_context.json (no AI)
-python scripts/diagnose_failure.py                     # one Claude call -> diagnosis.json
-python scripts/propose_fix.py                          # renders the human-approval report
+python scripts/triage/capture_failure.py                      # writes failure_context.json (no AI)
+python scripts/triage/diagnose_failure.py                     # one Claude call -> diagnosis.json
+python scripts/triage/propose_fix.py                          # renders the human-approval report
 ```
 
 Then apply the proposed fix (add `crypto` back to the list in
-`models/staging/_staging.yml`) and rebuild to confirm green:
+`models/01_staging/_staging.yml`) and rebuild to confirm green:
 
 ```bash
 DBT_TARGET=duckdb dbt build --profiles-dir .           # GREEN: PASS=36
