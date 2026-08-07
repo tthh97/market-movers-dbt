@@ -40,3 +40,11 @@ venv/
 # Lavish Editor review sessions (not part of the pipeline)
 .lavish/
 exports/
+
+# Generated dashboard - published to Pages, never committed
+site/
+
+# Blocked drafts from the report agent's publication gate. Per-run evidence of
+# a catch, not source. The published reports themselves are deliberately NOT
+# ignored: those are the artifact the gate exists to produce.
+reports/*-gate-failure.json

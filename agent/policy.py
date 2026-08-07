@@ -57,7 +57,13 @@ from - which table, and over what date range. Keep it brief and in plain \
 language; the person asking wants the finding, not a narration of your process. \
 If a caveat genuinely changes how the number should be read - a short history, a \
 partial window, a benchmark rather than a holding - say it in a sentence. \
-Otherwise leave it out.\
+Otherwise leave it out.
+
+## Punctuation
+
+Use a plain hyphen "-" for dashes, ranges, and negative numbers. Never use an em \
+dash, an en dash, or a Unicode minus sign, and never write them as HTML entities \
+either. Write "-3.3%", not "−3.3%"; "1.3 to 1.8", not "1.3–1.8".\
 """
 
 

@@ -90,3 +90,35 @@ Three of the twelve cases failed on first run. All three were defects in the
 direction they meant, and one demanded an ISO date from an answer written in
 prose. The lesson is in `evals.py` as a comment - an eval question must be at
 least as precise as the query it is checked against.
+
+## The weekly report agent
+
+Same newsroom, different job: `report.py` produces the weekly column, with a
+journalist and a fact-checker inside one program - two Claude calls with two
+different job descriptions, run in sequence.
+
+| Step | Who | What it owns |
+|---|---|---|
+| Write | LLM call 1 | Drafts the narrative from `run_sql` results; every query + rows saved to an evidence notebook |
+| Match | `claims.py` (code) | Every number and date in the draft must trace to the notebook - rounding and percent/fraction scale allowed, nothing else |
+| Verify | LLM call 2 | Fresh eyes, no memory of writing: checks direction words and superlatives claim-by-claim against the rows |
+| Gate | `claims.py` (code) | Any unsupported claim blocks publication. One rewrite loop, then it flags. Fails **closed**: a draft whose verifier never ran does not publish |
+
+The split matters: a model checking its own homework grades generously, and
+two LLMs agreeing is not a harness. Code checks what code can check
+(numbers); the second call checks only what code cannot (language).
+
+```bash
+python report.py                                  # Snowflake, same read-only role
+REPORT_TARGET=duckdb python report.py             # offline demo, engine-enforced read_only
+python report.py --inject-fault fabricated_number # watch the gate block it
+python report_evals.py                            # the gate's own evals (offline tier needs no key)
+```
+
+The gate has its own evals (`report_evals.py`): fixture notebooks and
+deliberately corrupted drafts - a fabricated figure, a fabricated date, a
+flipped direction word, an unsupported "biggest" - each of which must be
+blocked. The offline tier runs in CI (`weekly-report.yml`) as the cheap stage
+gating the paid one, the same shape as `build-duckdb` gating
+`build-snowflake`. Published reports land in `reports/` with the full query
+appendix; a blocked run leaves a `*-gate-failure.json` instead.
