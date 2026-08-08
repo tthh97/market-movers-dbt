@@ -128,12 +128,22 @@ def _require(name: str) -> str:
     return value
 
 
-def _private_key_der(path: str, passphrase: str | None):
-    """Load a PEM key into the DER bytes the Snowflake connector expects."""
+def load_private_key(env_prefix: str = "SNOWFLAKE") -> bytes:
+    """Read the PEM key path (and optional passphrase) from the environment and
+    return the DER bytes the Snowflake connector expects.
+
+    One helper for every Snowflake caller - the writer here and the read-only
+    QueryRunner in agent/query.py - so the key-loading logic lives in one place
+    rather than being pasted per script.
+    """
     from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
 
-    with open(path, "rb") as f:
+    path = os.environ.get(f"{env_prefix}_PRIVATE_KEY_PATH", "").strip()
+    if not path:
+        raise SystemExit(f"{env_prefix}_PRIVATE_KEY_PATH is not set.")
+    passphrase = os.environ.get(f"{env_prefix}_PRIVATE_KEY_PASSPHRASE") or None
+    with open(os.path.expanduser(path), "rb") as f:
         key = serialization.load_pem_private_key(
             f.read(),
             password=passphrase.encode() if passphrase else None,
@@ -168,9 +178,7 @@ class _Snowflake:
         # service users, so CI always takes this branch.
         key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH", "").strip()
         if key_path:
-            params["private_key"] = _private_key_der(
-                key_path, os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE") or None
-            )
+            params["private_key"] = load_private_key()
         else:
             params["password"] = _require("SNOWFLAKE_PASSWORD")
 

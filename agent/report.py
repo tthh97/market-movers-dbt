@@ -89,40 +89,21 @@ class _SnowflakeBackend:
 
 
 class _DuckDBBackend:
-    """Read-only DuckDB over the repo's market.duckdb.
+    """Read-only DuckDB over the repo's market.duckdb, via the shared QueryRunner.
 
-    read_only=True is the layer that matters here - the engine itself refuses
-    writes, the same role Snowflake grants play on the real path. The
-    statement-shape check is borrowed from tools.py so the two backends
-    reject identical inputs.
+    read_only=True (inside QueryRunner) is the layer that matters here - the
+    engine itself refuses writes, the offline counterpart to the Snowflake
+    grants. The statement-shape guard is the same one the Snowflake path uses,
+    because both now run through QueryRunner.
     """
 
-    MAX_ROWS = 50
-
     def __init__(self):
-        import duckdb
-        import tools
-        self._is_read_only = tools._is_read_only
-        path = os.environ.get(
-            "MARKET_DUCKDB_PATH",
-            os.path.join(os.path.dirname(HERE), "market.duckdb"))
-        self._con = duckdb.connect(path, read_only=True)
+        import query
+        self._runner = query.QueryRunner("duckdb")
+        self._render = query.render_for_model
 
-    def run_sql(self, query: str) -> str:
-        bad = self._is_read_only(query)
-        if bad:
-            return bad
-        try:
-            cur = self._con.execute(query.strip().rstrip(";"))
-            cols = [d[0] for d in cur.description]
-            rows = cur.fetchmany(self.MAX_ROWS)
-        except Exception as e:
-            return f"SQL ERROR: {e}"
-        if not rows:
-            return "(0 rows)"
-        out = [" | ".join(cols)]
-        out += [" | ".join("NULL" if v is None else str(v) for v in r) for r in rows]
-        return "\n".join(out)
+    def run_sql(self, q: str) -> str:
+        return self._render(self._runner.run(q))
 
     def get_schema(self) -> str:
         return self.run_sql(
@@ -132,7 +113,7 @@ class _DuckDBBackend:
             " where table_schema = 'main' group by table_name order by table_name")
 
     def close(self) -> None:
-        self._con.close()
+        self._runner.close()
 
 
 def _backend():

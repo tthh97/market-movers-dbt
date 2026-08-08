@@ -51,86 +51,45 @@ load_dotenv(os.path.join(ROOT, "agent", ".env"))
 
 
 # ---------------------------------------------------------------------------
-# Backends. Both return (lowercased column names, rows) so everything
-# downstream is written once - Snowflake upper-cases identifiers and DuckDB
-# does not, and that difference should die at this boundary.
+# Backend. One read-only QueryRunner, shared with the agent and the report.
+# Rows come back as dicts with lowercased column names - Snowflake upper-cases
+# identifiers and DuckDB does not, and that difference dies here. limit=None
+# because the dashboard aggregates over the whole result, not its first page.
 # ---------------------------------------------------------------------------
 
+sys.path.insert(0, os.path.join(ROOT, "agent"))
+import query  # noqa: E402 - the shared read-only QueryRunner lives in agent/
 
-class _SnowflakeBackend:
-    label = "Snowflake"
 
-    def __init__(self):
-        import snowflake.connector
-        from cryptography.hazmat.backends import default_backend
-        from cryptography.hazmat.primitives import serialization
-
-        def need(name: str) -> str:
-            value = os.environ.get(name, "").strip()
-            if not value:
-                raise SystemExit(
-                    f"{name} is not set. build_viz.py needs SNOWFLAKE_ACCOUNT, "
-                    "SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY_PATH, SNOWFLAKE_ROLE, "
-                    "SNOWFLAKE_WAREHOUSE, SNOWFLAKE_DATABASE and SNOWFLAKE_SCHEMA. "
-                    "See .env.example, or run with VIZ_TARGET=duckdb."
-                )
-            return value
-
-        with open(os.path.expanduser(need("SNOWFLAKE_PRIVATE_KEY_PATH")), "rb") as f:
-            key = serialization.load_pem_private_key(
-                f.read(), password=None, backend=default_backend())
-
-        self._con = snowflake.connector.connect(
-            account=need("SNOWFLAKE_ACCOUNT"),
-            user=need("SNOWFLAKE_USER"),
-            private_key=key.private_bytes(
-                encoding=serialization.Encoding.DER,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption()),
-            role=need("SNOWFLAKE_ROLE"),
-            warehouse=need("SNOWFLAKE_WAREHOUSE"),
-            database=need("SNOWFLAKE_DATABASE"),
-            schema=need("SNOWFLAKE_SCHEMA"),
-        )
-        self.detail = f'{os.environ["SNOWFLAKE_DATABASE"]}.{os.environ["SNOWFLAKE_SCHEMA"]}'
+class _Backend:
+    def __init__(self, engine: str):
+        self._runner = query.QueryRunner(engine)
+        if engine == "snowflake":
+            self.label = "Snowflake"
+            self.detail = (
+                f'{query.require("SNOWFLAKE_DATABASE")}.'
+                f'{query.require("SNOWFLAKE_SCHEMA")}'
+            )
+        else:
+            self.label = "DuckDB"
+            path = os.environ.get(
+                "MARKET_DUCKDB_PATH", os.path.join(ROOT, "market.duckdb"))
+            self.detail = os.path.basename(path)
 
     def rows(self, sql: str) -> list[dict]:
-        cur = self._con.cursor()
-        try:
-            cur.execute(sql)
-            cols = [c[0].lower() for c in cur.description]
-            return [dict(zip(cols, r)) for r in cur.fetchall()]
-        finally:
-            cur.close()
+        result = self._runner.run(sql, limit=None)
+        if result.is_error:
+            raise RuntimeError(result.error)
+        cols = [c.lower() for c in result.columns]
+        return [dict(zip(cols, r)) for r in result.rows]
 
     def close(self) -> None:
-        self._con.close()
-
-
-class _DuckDBBackend:
-    label = "DuckDB"
-
-    def __init__(self):
-        import duckdb
-        path = os.environ.get("MARKET_DUCKDB_PATH", os.path.join(ROOT, "market.duckdb"))
-        # read_only is the engine enforcing what the docstring promises. A
-        # generator that could write its own source is a generator you have to
-        # trust; this one you do not.
-        self._con = duckdb.connect(path, read_only=True)
-        self.detail = os.path.basename(path)
-
-    def rows(self, sql: str) -> list[dict]:
-        cur = self._con.execute(sql)
-        cols = [d[0].lower() for d in cur.description]
-        return [dict(zip(cols, r)) for r in cur.fetchall()]
-
-    def close(self) -> None:
-        self._con.close()
+        self._runner.close()
 
 
 def _backend():
     target = os.environ.get("VIZ_TARGET", "snowflake").lower()
-    return _DuckDBBackend() if target == "duckdb" else _SnowflakeBackend()
+    return _Backend("duckdb" if target == "duckdb" else "snowflake")
 
 
 # ---------------------------------------------------------------------------

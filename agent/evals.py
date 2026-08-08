@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 import agent  # noqa: E402
+import query  # noqa: E402
 import tools  # noqa: E402
 
 # Each case: the question, a SQL query whose row supplies the expected value(s),
@@ -127,14 +128,21 @@ CASES = [
 ]
 
 
+_reader = None
+
+
 def _golden(sql: str, fmts) -> list[str]:
-    out = tools.run_sql(sql)
-    if out.startswith(("ERROR", "SQL ERROR")):
-        raise RuntimeError(f"golden query failed: {out}")
-    lines = out.splitlines()
-    if len(lines) < 2:
+    # A dedicated read-only runner, separate from the agent's own connection, so
+    # computing the expected answer never touches the agent's query budget.
+    global _reader
+    if _reader is None:
+        _reader = query.QueryRunner("snowflake")
+    result = _reader.run(sql)
+    if result.is_error:
+        raise RuntimeError(f"golden query failed: {result.error}")
+    if not result.rows:
         raise RuntimeError(f"golden query returned no rows: {sql}")
-    raw = lines[1].split(" | ")
+    raw = ["NULL" if v is None else str(v) for v in result.rows[0]]
     vals = []
     for v, f in zip(raw, fmts):
         try:
@@ -179,7 +187,6 @@ def main() -> None:
     for c in cases:
         expected: list[str] = []
         if c.get("expect_sql"):
-            tools.reset_budget()
             expected = _golden(c["expect_sql"].format(S=S), c.get("fmt", [str]))
 
         answer = agent.run(c["q"], verbose=False)
@@ -205,6 +212,8 @@ def main() -> None:
         passed, failed = passed + ok, failed + (not ok)
 
     tools.close()
+    if _reader is not None:
+        _reader.close()
     print(f"\n{passed}/{passed + failed} passed")
     raise SystemExit(0 if failed == 0 else 1)
 
