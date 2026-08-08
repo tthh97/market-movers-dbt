@@ -1,5 +1,7 @@
 # Market Movers - a dbt analytics pipeline on Snowflake
 
+**[Live dashboard &rarr;](https://tthh97.github.io/market-movers-dbt/)** - a fresh snapshot is published on every build; the landing page keeps the full archive.
+
 A small, **fully reproducible** analytics-engineering project: pull daily prices
 for a watchlist, model them through staging → intermediate → marts in dbt, and
 surface *movers*, *momentum/drawdown*, and a *portfolio-bias* view. The nightly
