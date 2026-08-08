@@ -1,41 +1,39 @@
 name: dashboard-pages
 
-# Publishes the marts as a static dashboard to GitHub Pages. Runs entirely on
-# the offline DuckDB path: no credentials, no warehouse, so it can rebuild on
-# every push to main. The page is a baked snapshot of synthetic data - there is
-# no live database behind it, by design.
+# Publishes the marts as a dashboard to GitHub Pages, keeping a snapshot from
+# every build. Runs entirely on the offline DuckDB path: no credentials, no
+# warehouse, so it can rebuild on every push to main. The page is a baked
+# snapshot of synthetic data - there is no live database behind it, by design.
 #
-# The synthetic path is the point, not a limitation. This job holds no secret,
-# so nothing here can leak one, and the public page carries no real position
-# data. The same generator renders production against Snowflake in daily.yml,
-# where the output stays a private artifact. One script, two surfaces, and the
-# page says in plain words which one it is showing.
+# Each run drops a dated snapshot into runs/ on the gh-pages branch and
+# regenerates index.html (an archive of every snapshot, newest first). The
+# branch accumulates the snapshot files, so the archive is the full history of
+# builds; GitHub Pages serves the branch directly.
 on:
   push:
     branches: [main]
-    # Only rebuild when something that affects the page changed. A docs-only
-    # commit does not need to redeploy Pages.
+    # Only rebuild when something that affects the page changed.
     paths:
       - "models/**"
       - "seeds/**"
       - "scripts/build_viz.py"
+      - "scripts/build_index.py"
       - "scripts/seed_sample.py"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
-# Pages deploy needs these; nothing here writes to the repo.
+# Only the gh-pages archive branch is written; contents:write covers the push.
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
-# One deploy at a time; a newer build should supersede an in-flight one.
+# One publish at a time; a newer build should supersede an in-flight one, and
+# serialising avoids two runs racing to force-push the archive branch.
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     env:
       DBT_TARGET: duckdb
@@ -49,7 +47,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # Same offline path as stage 1 of daily.yml: synthetic seed exercises
+      # Same offline path as stage 1 of daily.yml: the synthetic seed exercises
       # every model, so the dashboard reflects a real build of the DAG.
       - name: Seed synthetic sample
         run: python scripts/seed_sample.py
@@ -57,27 +55,40 @@ jobs:
       - name: Build models
         run: dbt build --profiles-dir .
 
-      # VIZ_TARGET is set explicitly rather than left to the default. The
-      # generator defaults to Snowflake, and a Pages job that silently tried to
-      # reach a warehouse would fail here for the right reason but for the
-      # wrong-looking one.
+      # VIZ_TARGET is set explicitly: the generator defaults to Snowflake, and a
+      # Pages job that silently tried to reach a warehouse would fail here for
+      # the right reason but for the wrong-looking one.
       - name: Render dashboard
         env:
           VIZ_TARGET: duckdb
-        run: python scripts/build_viz.py --out site
+        run: python scripts/build_viz.py --out exports/dashboard.html
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
-        with:
-          path: site
+      # Rebuild the whole archive each run: bring forward every existing
+      # snapshot so the branch accumulates, add this build's, regenerate the
+      # index, then force-push. The snapshot files are the archive; gh-pages
+      # itself stays a single rolling commit so its history does not bloat.
+      - name: Publish snapshot to the archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y-%m-%d-%H%M)
+          SHA=$(git rev-parse --short HEAD)
 
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+          rm -rf /tmp/site && mkdir -p /tmp/site/runs
+          if git fetch --quiet origin gh-pages 2>/dev/null; then
+            git archive FETCH_HEAD | tar -x -C /tmp/site
+          fi
+          cp exports/dashboard.html "/tmp/site/runs/${STAMP}-${SHA}.html"
+          touch /tmp/site/.nojekyll
+          python scripts/build_index.py /tmp/site
+
+          cd /tmp/site
+          git init --quiet -b gh-pages
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "dashboard snapshot ${STAMP}-${SHA}"
+          git push --force --quiet \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            gh-pages
