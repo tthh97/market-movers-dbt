@@ -27,6 +27,7 @@ import uuid
 
 from dotenv import load_dotenv
 
+import claims
 import policy
 import tools
 
@@ -96,7 +97,16 @@ class Trace:
 
 
 def _text(resp) -> str:
-    return "\n".join(b.text for b in resp.content if b.type == "text").strip()
+    """Assistant text, with house punctuation applied.
+
+    Normalising here rather than at each return means no future caller can
+    forget it - this is the only place assistant text is extracted, so it is
+    the only place the rule has to hold. Normalise rather than reject: the
+    agent answers questions, and refusing one over a dash would be worse than
+    the dash.
+    """
+    text = "\n".join(b.text for b in resp.content if b.type == "text").strip()
+    return claims.normalize_punctuation(text)
 
 
 def run(question: str, verbose: bool = True) -> str:

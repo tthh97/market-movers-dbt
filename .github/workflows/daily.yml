@@ -142,12 +142,33 @@ jobs:
           SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
         run: dbt docs generate --profiles-dir .
 
+      # The production dashboard. Same generator that renders the public Pages
+      # site from the synthetic seed, pointed at the real marts - and the output
+      # stays an artifact rather than being published, because these are actual
+      # positions. Reads with the transformer role that just built the tables,
+      # so this step introduces no new credential.
+      - name: Build dashboard
+        env:
+          VIZ_TARGET: snowflake
+          SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE_TRANSFORMER }}
+          SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
+        run: python scripts/build_viz.py
+
       - name: Upload dbt target (docs + run results)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dbt-target-snowflake
           path: target/
+          retention-days: 14
+
+      - name: Upload dashboard
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dashboard
+          path: exports/dashboard.html
+          if-no-files-found: ignore
           retention-days: 14
 
   # Stage 3 - assisted triage. Its own job, fired by `failure()`, so it runs for
@@ -159,7 +180,14 @@ jobs:
   triage:
     runs-on: ubuntu-latest
     needs: [build-duckdb, build-snowflake]
-    if: failure()
+    # cancelled() as well as failure(): GitHub treats failure() as false when an
+    # upstream job is CANCELLED rather than failed, so an infra-killed run used
+    # to go red with no diagnosis and no issue. That happened for real on run
+    # 31126531807, which sat queued 15 minutes and was then dropped with "The
+    # job was not acquired by Runner of type hosted". A cancelled job leaves no
+    # dbt artifacts, so capture_failure.py reports no_run_results - which is a
+    # far more useful outcome than silence.
+    if: failure() || cancelled()
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 

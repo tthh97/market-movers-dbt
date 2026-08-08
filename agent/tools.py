@@ -1,89 +1,44 @@
 """
 Tools the agent can call: get_schema and run_sql.
 
-The guardrails live inside run_sql rather than in a wrapper around it. That is
-deliberate: a wrapper is something a future caller can forget to use, whereas a
-check inside the only function that can reach the warehouse cannot be bypassed
-by calling the tool a different way.
+The read-only guard and the warehouse connection now live in agent/query.py
+(QueryRunner), shared with the report and dashboard paths. This module keeps
+what is specific to the agent's tool interface: the per-question query budget,
+the Snowflake schema listing, and the tool schemas Claude sees.
 
-Three layers, weakest to strongest:
-
-  1. Statement shape  - SELECT/WITH only, single statement. Cheap and local.
-  2. Query budget     - a per-run cap, so a confused agent cannot loop on the
-                        warehouse and run up credits.
-  3. Snowflake grants - the agent connects as a role with USAGE + SELECT and
-                        nothing else. This is the layer that actually matters;
-                        the first two exist so obvious mistakes fail without
-                        waking the warehouse at all.
-
-Layer 3 is verified, not assumed: as the configured service user and role,
-CREATE TABLE, DELETE, reading the raw landing schema, and USE ROLE ACCOUNTADMIN
-all fail with access-control errors. Layers 1 and 2 keep cheap mistakes cheap.
+The guardrails still cannot be bypassed. run_sql goes through QueryRunner, whose
+read-only check runs inside run() itself rather than in a wrapper a caller could
+forget. And the agent connects as a role with USAGE + SELECT and nothing else -
+the layer that actually matters. As that service user and role, CREATE TABLE,
+DELETE, reading the raw landing schema, and USE ROLE ACCOUNTADMIN all fail with
+access-control errors; the budget and the statement-shape check exist so obvious
+mistakes fail without waking the warehouse at all.
 """
 
 from __future__ import annotations
 
-import os
+import query
 
-import snowflake.connector
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
+MAX_ROWS = query.DEFAULT_ROW_LIMIT   # rows returned to the model per query
+MAX_QUERIES = 12                     # per question; see the budget below
 
-MAX_ROWS = 50          # rows returned to the model per query
-MAX_QUERIES = 12       # per process run; see _budget below
-
-_con = None            # reused across calls - reconnecting costs ~1s each time
+_runner = None
 _queries_run = 0
 
 
-def _require(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise SystemExit(
-            f"{name} is not set. The agent needs SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, "
-            "SNOWFLAKE_PRIVATE_KEY_PATH, SNOWFLAKE_ROLE, SNOWFLAKE_WAREHOUSE, "
-            "SNOWFLAKE_DATABASE and SNOWFLAKE_SCHEMA. See .env.example."
-        )
-    return value
-
-
-def _private_key_der(path: str):
-    with open(path, "rb") as f:
-        key = serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
-    return key.private_bytes(
-        encoding=serialization.Encoding.DER,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-
-
-def _connect():
-    """One connection per process, opened lazily.
-
-    Reused rather than reopened per query. This does not keep the warehouse
-    awake - Snowflake suspends on idle regardless of open sessions - it just
-    avoids paying the connect handshake on every tool call.
-    """
-    global _con
-    if _con is None:
-        _con = snowflake.connector.connect(
-            account=_require("SNOWFLAKE_ACCOUNT"),
-            user=_require("SNOWFLAKE_USER"),
-            private_key=_private_key_der(_require("SNOWFLAKE_PRIVATE_KEY_PATH")),
-            role=_require("SNOWFLAKE_ROLE"),
-            warehouse=_require("SNOWFLAKE_WAREHOUSE"),
-            database=_require("SNOWFLAKE_DATABASE"),
-            schema=_require("SNOWFLAKE_SCHEMA"),
-            autocommit=True,
-        )
-    return _con
+def _get_runner() -> "query.QueryRunner":
+    """One read-only Snowflake runner per process, opened lazily and reused."""
+    global _runner
+    if _runner is None:
+        _runner = query.QueryRunner("snowflake")
+    return _runner
 
 
 def close() -> None:
-    global _con
-    if _con is not None:
-        _con.close()
-        _con = None
+    global _runner
+    if _runner is not None:
+        _runner.close()
+        _runner = None
 
 
 def reset_budget() -> None:
@@ -92,29 +47,7 @@ def reset_budget() -> None:
     _queries_run = 0
 
 
-def _is_read_only(q: str) -> str | None:
-    """Return an error string if the statement is not a single read, else None."""
-    stripped = q.strip().rstrip(";").strip()
-    if not stripped:
-        return "ERROR: empty query."
-    # A trailing semicolon is fine and stripped above. An *interior* one means
-    # more than one statement was submitted - reject rather than hope the
-    # driver refuses it, since "select 1; drop table t" passes a naive
-    # startswith() check.
-    if ";" in stripped:
-        return (
-            "ERROR: only one statement per call. Remove the ';' and send a single "
-            "SELECT, or make separate run_sql calls."
-        )
-    if not stripped.lower().startswith(("select", "with")):
-        return (
-            "ERROR: only SELECT queries are allowed. This tool is read-only - it "
-            "cannot INSERT, UPDATE, DELETE, CREATE, or DROP."
-        )
-    return None
-
-
-def run_sql(query: str) -> str:
+def run_sql(query_text: str) -> str:
     """Run one read-only SELECT against the analytics schema and return rows as text.
 
     Errors are returned as a string rather than raised, so the model reads the
@@ -123,7 +56,10 @@ def run_sql(query: str) -> str:
     """
     global _queries_run
 
-    bad = _is_read_only(query)
+    # Guarded here before the budget is charged, so a malformed query does not
+    # consume the allowance; run() guards again, which is what makes the check
+    # impossible to bypass.
+    bad = query.read_only_error(query_text)
     if bad:
         return bad
 
@@ -133,28 +69,8 @@ def run_sql(query: str) -> str:
             "Answer with what you already have, and say which part is unanswered."
         )
 
-    q = query.strip().rstrip(";").strip()
-    try:
-        cur = _connect().cursor()
-        _queries_run += 1
-        cur.execute(q)
-        cols = [c[0] for c in cur.description]
-        rows = cur.fetchmany(MAX_ROWS)
-        cur.close()
-    except Exception as e:  # returned to the model, not raised
-        return f"SQL ERROR: {e}"
-
-    if not rows:
-        return "(0 rows)"
-
-    out = [" | ".join(cols)]
-    out += [" | ".join("NULL" if v is None else str(v) for v in r) for r in rows]
-    if len(rows) == MAX_ROWS:
-        out.append(
-            f"(truncated at {MAX_ROWS} rows - re-run with an aggregate, a tighter "
-            "filter, or an explicit LIMIT rather than assuming this is everything)"
-        )
-    return "\n".join(out)
+    _queries_run += 1
+    return query.render_for_model(_get_runner().run(query_text, limit=MAX_ROWS))
 
 
 def get_schema() -> str:
@@ -167,8 +83,8 @@ def get_schema() -> str:
     # No defaults: hardcoding the real database and schema would publish the
     # account's layout, and a silent fallback to the wrong one is worse than a
     # loud failure.
-    schema = _require("SNOWFLAKE_SCHEMA")
-    db = _require("SNOWFLAKE_DATABASE")
+    schema = query.require("SNOWFLAKE_SCHEMA")
+    db = query.require("SNOWFLAKE_DATABASE")
     sql = f"""
         select t.table_name, t.table_type, t.row_count,
                listagg(c.column_name || ' ' || c.data_type, ', ')
@@ -180,19 +96,15 @@ def get_schema() -> str:
         group by t.table_name, t.table_type, t.row_count
         order by t.table_name
     """
-    try:
-        cur = _connect().cursor()
-        cur.execute(sql)
-        rows = cur.fetchall()
-        cur.close()
-    except Exception as e:
-        return f"SCHEMA ERROR: {e}"
-
-    if not rows:
+    result = _get_runner().run(sql, limit=None)
+    if result.is_error:
+        # Same message the warehouse gave, labelled for the schema tool.
+        return result.error.replace("SQL ERROR:", "SCHEMA ERROR:", 1)
+    if not result.rows:
         return f"No readable tables in {db}.{schema}."
 
     out = [f"{db}.{schema} - readable objects:"]
-    for name, kind, n, cols in rows:
+    for name, kind, n, cols in result.rows:
         count = f", {n} rows" if n is not None else ""
         out.append(f"\n{name} ({kind.lower()}{count})\n  {cols}")
     return "\n".join(out)

@@ -78,6 +78,7 @@ ingest.py                     # real yfinance → raw.prices (idempotent)
 warehouse.py                  # shared connection helper, so loader and models agree on the target
 scripts/seed_sample.py        # synthetic → raw.prices (offline/demo)
 scripts/inject_fault.py       # breaks the build on purpose, to demo triage (CI-guarded)
+scripts/build_viz.py          # marts → one self-contained HTML dashboard (no CDN, no model call)
 
 seeds/watchlist.csv           # node 1  - the tracked universe + holding/benchmark flags
 models/01_staging/            # nodes 4-13  - stg_prices, stg_watchlist, sources + freshness
@@ -91,9 +92,28 @@ scripts/triage/               # runs only when a build fails:
   capture_failure.py          #   writes failure_context.json (no AI, session 1)
   diagnose_failure.py         #   one Claude API call → proposed diagnosis (session 2)
   propose_fix.py              #   opens a human-approval GitHub issue in CI (session 3)
+
+agent/                        # reads the marts, never writes to them:
+  agent.py tools.py policy.py #   ask a question in English, get an answer plus the SQL behind it
+  evals.py                    #   12 golden questions, expectations evaluated at run time
+  report.py claims.py         #   the weekly report: writer → matcher → verifier → publication gate
+  report_evals.py             #   the gate's own evals; the offline tier needs no key and no warehouse
 ```
 
 ## Design choices worth talking through
+
+- **The dashboard is deterministic; only the narrative is written by a model.**
+  `build_viz.py` computes every chart and figure in SQL and Python, so the page
+  renders whether or not any model call succeeds. The prose block above the
+  charts comes from `agent/report.py`, and only ever from a report that already
+  passed the publication gate: a blocked draft has no path onto the page, not a
+  degraded one. The page also refuses a narrative written against a different
+  warehouse than the charts, so production prose can never sit on synthetic
+  numbers.
+- **Two surfaces, one generator.** The public Pages site is built from the
+  synthetic seed - no credentials in the deploy job, no real positions on the
+  open web - and says so in a banner. The same script renders production from
+  Snowflake in the nightly build, where the output stays a private artifact.
 
 - **Idempotent ingest.** Keyed on `(ticker, trade_date)`, so a same-day re-run
   refreshes rather than duplicates: a `MERGE` from a staging table on Snowflake,
