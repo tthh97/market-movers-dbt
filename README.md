@@ -2,6 +2,8 @@
 
 **[Live dashboard &rarr;](https://tthh97.github.io/market-movers-dbt/)** - a fresh snapshot is published on every build; the landing page keeps the full archive.
 
+**[27 tests, and the one that mattered &rarr;](https://tthh97.github.io/market-movers-dbt/explainers/data-quality-27-tests.html)** - how a completeness test caught 34 rows that 26 green tests could not see.
+
 A small, **fully reproducible** analytics-engineering project: pull daily prices
 for a watchlist, model them through staging → intermediate → marts in dbt, and
 surface *movers*, *momentum/drawdown*, and a *portfolio-bias* view. The nightly
@@ -40,7 +42,7 @@ seeds/watchlist ─────────────────────�
 ```
 
 - **staging** - typed, renamed, de-duplicated (views)
-- **fct_prices** - incremental fact, one row per ticker per day (delete+insert on a surrogate key)
+- **fct_prices** - incremental fact, one row per ticker per day (`merge` on a `ticker|date` surrogate key)
 - **intermediate** - daily returns (1d/5d/1m), 5/20-day MAs, running peak, drawdown, plus a
   "latest row per ticker" view every mart's current-snapshot logic shares
 - **marts** - analysis-ready tables (movers, momentum, portfolio bias, sector overview)
@@ -122,12 +124,19 @@ agent/                        # reads the marts, never writes to them:
   `INSERT OR REPLACE` on DuckDB. Prices are also validated on the way in, and a
   row with no usable close is dropped and counted rather than backfilled, since a
   fabricated close would be indistinguishable from a real one downstream.
-- **Incremental fact.** `fct_prices` reprocesses only from the latest stored day
-  onward, with delete+insert on a `ticker|date` surrogate key - the same
-  incremental discipline used in production loads.
-- **Tested + monitored.** 26 data tests - not_null, unique, accepted_values, a
-  `relationships` FK from the fact to the watchlist, and a singular no-negative-close
-  test - plus source-freshness thresholds.
+- **Incremental fact.** `fct_prices` re-reads a trailing window (30 days by default,
+  `fct_prices_lookback_days`) and `MERGE`s on a `ticker|date` surrogate key, so a
+  late-arriving or corrected row still has somewhere to land. An earlier version
+  started at the newest stored day instead; because crypto trades 7 days a week and
+  drags that marker past the equity calendar, it silently dropped 34 rows for eleven
+  days. [The write-up](https://tthh97.github.io/market-movers-dbt/explainers/data-quality-27-tests.html)
+  walks through it.
+- **Tested + monitored.** 27 data tests - not_null, unique, accepted_values, a
+  `relationships` FK from the fact to the watchlist, and two singular tests:
+  no-negative-close, and `assert_fct_prices_complete`, which anti-joins the fact back
+  to source so a row that never arrived fails the build. The other 26 check that the
+  rows *present* are well-formed, never that the rows *expected* are there - which is
+  exactly why the gap above stayed green. Plus source-freshness thresholds.
 - **Assisted-triage on failure.** When the nightly `dbt build` fails, three
   failure-only CI steps run in sequence: `scripts/triage/capture_failure.py` (no AI) turns
   dbt's artifacts into one clean `failure_context.json`; `scripts/triage/diagnose_failure.py`
