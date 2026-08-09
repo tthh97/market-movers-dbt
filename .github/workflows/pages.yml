@@ -19,6 +19,7 @@ on:
       - "scripts/build_viz.py"
       - "scripts/build_index.py"
       - "scripts/seed_sample.py"
+      - "docs/explainers/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -80,6 +81,16 @@ jobs:
             git archive FETCH_HEAD | tar -x -C /tmp/site
           fi
           cp exports/dashboard.html "/tmp/site/runs/${STAMP}-${SHA}.html"
+
+          # Explainers are copied fresh from main every run rather than being
+          # carried forward from the branch, so main stays the single source of
+          # truth: editing one here is a normal commit, and deleting one
+          # actually removes it from the site instead of stranding a copy.
+          rm -rf /tmp/site/explainers
+          if [ -d docs/explainers ]; then
+            cp -R docs/explainers /tmp/site/explainers
+          fi
+
           touch /tmp/site/.nojekyll
           python scripts/build_index.py /tmp/site
 
