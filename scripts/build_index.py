@@ -1,5 +1,5 @@
 """
-Build the dashboard archive landing page.
+Build the site landing page: the dashboard archive, plus any explainers.
 
 Each run of the pages workflow drops a dated snapshot into runs/ and calls this
 to regenerate index.html - a list of every snapshot, newest first, with the
@@ -10,13 +10,27 @@ same constraints the dashboards themselves follow.
 
 <site_dir> holds a runs/ directory of `YYYY-MM-DD-HHMM-<sha>.html` snapshots;
 index.html is written at its root.
+
+It may also hold an explainers/ directory, copied there from docs/explainers by
+the workflow. Those are prose pages about how the pipeline works, and they are
+listed by reading each file's own <title> and <meta name="description"> rather
+than from a hardcoded table here. The index is regenerated and force-pushed on
+every build, so anything this function does not discover would be silently
+dropped from the site on the next run - discovery is what keeps a new explainer
+from needing a matching edit in this file.
 """
 
 from __future__ import annotations
 
 import html
 import os
+import re
 import sys
+
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+_DESC_RE = re.compile(
+    r"""<meta\s+name=["']description["']\s+content=["'](.*?)["']""", re.I | re.S
+)
 
 
 def parse_name(fname: str) -> dict:
@@ -28,6 +42,37 @@ def parse_name(fname: str) -> dict:
     sha = parts[4] if len(parts) >= 5 else ""
     when_time = f"{hhmm[:2]}:{hhmm[2:]}" if len(hhmm) == 4 else hhmm
     return {"file": fname, "date": date, "time": when_time, "sha": sha}
+
+
+def read_meta(path: str) -> dict:
+    """Pull an explainer's own title and description out of its <head>.
+
+    Only the head is read: these pages embed SQL and prose that can contain
+    anything, and scanning the whole file risks matching a <title> that is
+    being talked about rather than declared.
+    """
+    with open(path, encoding="utf-8") as f:
+        head = f.read(4096)
+    title = _TITLE_RE.search(head)
+    desc = _DESC_RE.search(head)
+    fallback = os.path.basename(path)[:-5].replace("-", " ")
+    return {
+        "file": os.path.basename(path),
+        "title": " ".join(title.group(1).split()) if title else fallback,
+        "desc": " ".join(desc.group(1).split()) if desc else "",
+    }
+
+
+def collect_explainers(site_dir: str) -> list:
+    """Every explainer present on the site, alphabetical by filename."""
+    d = os.path.join(site_dir, "explainers")
+    if not os.path.isdir(d):
+        return []
+    return [
+        read_meta(os.path.join(d, f))
+        for f in sorted(os.listdir(d))
+        if f.endswith(".html")
+    ]
 
 
 def render(site_dir: str) -> str:
@@ -54,6 +99,24 @@ def render(site_dir: str) -> str:
     latest_href = html.escape(f"runs/{runs[0]['file']}") if runs else "#"
     plural = "" if count == 1 else "s"
 
+    explainers = collect_explainers(site_dir)
+    if explainers:
+        rows = "\n".join(
+            f'      <li><a href="{html.escape("explainers/" + e["file"])}">'
+            f'<span class="etitle">{html.escape(e["title"])}</span>'
+            f'<span class="edesc">{html.escape(e["desc"])}</span></a></li>'
+            for e in explainers
+        )
+        explainer_section = f"""  <h2>Explainers</h2>
+  <p class="sect">How the pipeline works, and what went wrong along the way.</p>
+  <ul class="explainers">
+{rows}
+  </ul>
+
+"""
+    else:
+        explainer_section = ""
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -72,7 +135,9 @@ def render(site_dir: str) -> str:
           font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }}
   main {{ max-width:720px; margin:0 auto; padding:48px 20px; }}
   h1 {{ font-size:26px; margin:0 0 4px; }}
+  h2 {{ font-size:15px; margin:36px 0 2px; }}
   p.sub {{ color:var(--muted); margin:0 0 28px; }}
+  p.sect {{ color:var(--muted); font-size:13px; margin:0 0 12px; }}
   .cta {{ display:inline-block; background:var(--accent); color:#fff;
           text-decoration:none; padding:10px 16px; border-radius:8px;
           font-weight:600; margin-bottom:28px; }}
@@ -88,15 +153,21 @@ def render(site_dir: str) -> str:
   .latest {{ background:var(--accent); color:#fff; font-size:11px;
              padding:2px 8px; border-radius:999px; margin-left:10px; }}
   .empty {{ padding:16px; color:var(--muted); }}
+  ul.explainers li a {{ display:block; padding:14px 16px; }}
+  .etitle {{ display:block; font-weight:600; }}
+  .edesc {{ display:block; color:var(--muted); font-size:13px; margin-top:2px; }}
   footer {{ color:var(--muted); font-size:13px; margin-top:24px; }}
 </style>
 </head>
 <body>
 <main>
-  <h1>Market Movers - dashboard archive</h1>
-  <p class="sub">A snapshot from every build of the dbt pipeline, newest first.
-     Synthetic data, no live warehouse behind it.</p>
+  <h1>Market Movers</h1>
+  <p class="sub">A dbt analytics pipeline on Snowflake. Every build publishes a dashboard
+     snapshot here, alongside the explainers. Synthetic data, no live warehouse behind it.</p>
   <a class="cta" href="{latest_href}">View latest dashboard &rarr;</a>
+
+{explainer_section}  <h2>Build snapshots</h2>
+  <p class="sect">One dashboard per build of the pipeline, newest first.</p>
   <ul>
 {listing}
   </ul>
