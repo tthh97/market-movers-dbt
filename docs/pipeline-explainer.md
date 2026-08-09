@@ -102,7 +102,7 @@ functions in every mart.
   and the best/worst mover. *Why materialized as tables:* these are read by the
   notebook and should be fast and stable, not recomputed on every read.
 
-**6. The QC inspectors - dbt tests.** 26 data tests run in the same pass as the
+**6. The QC inspectors - dbt tests.** 27 data tests run in the same pass as the
 build (`dbt build`, not `dbt run` alone). They are the smoke detectors of the
 pipeline. Examples of what they enforce:
 - `not_null` / `unique` - no missing labels, no duplicate serial numbers (e.g.
@@ -111,6 +111,11 @@ pipeline. Examples of what they enforce:
   `financials`, `crypto`, or `benchmark`.
 - `relationships` - every ticker in the fact must exist in the watchlist, so a
   finished good always traces back to a real part.
+- `assert_fct_prices_complete` - every ticker-day the source holds must exist in
+  the fact. The 26 above inspect the goods that came down the line; this one
+  checks that none went missing on the way, which is a different question and the
+  only one that catches a silent gap. See
+  [27 tests, and the one that mattered](https://tthh97.github.io/market-movers-dbt/explainers/data-quality-27-tests.html).
 
 **7. Consumption - read-only.** The Jupyter notebook only reads the marts, over a
 `read_only=True` DuckDB connection. *Why read-only:* DuckDB is single-writer - a

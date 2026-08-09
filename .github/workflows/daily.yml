@@ -42,7 +42,7 @@ concurrency:
 # Snowflake key. The trailing comment records the human-readable version.
 jobs:
   # Stage 1 - offline logic check. No credentials, no network, no warehouse
-  # spend. The synthetic seed exercises every model and all 26 tests, so a red
+  # spend. The synthetic seed exercises every model and all 27 tests, so a red
   # build here is always a real SQL or schema regression rather than a data or
   # connectivity problem. It gates stage 2 so a known-broken pipeline never
   # burns Snowflake credits.
