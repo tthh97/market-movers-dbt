@@ -1,11 +1,19 @@
 name: weekly-report
 
 on:
-  schedule:
-    # Monday 10:00 UTC, two hours after the Monday daily-refresh (08:00 UTC),
-    # which is the run that lands Friday's settled close. Any earlier and the
-    # "week" the report covers would be missing its final session.
-    - cron: "0 10 * * 1"
+  # Unscheduled on purpose, alongside daily.yml. This job reads Snowflake, so
+  # its cron kept spinning the warehouse every Monday - and with the nightly
+  # refresh no longer scheduled, it would have reported on data that stopped
+  # advancing. Dispatch it after a manual refresh instead.
+  #
+  # To restore the weekly cadence, put this back (and restore daily.yml's cron
+  # first, or the report covers a week that was never ingested):
+  #
+  #   schedule:
+  #     # Monday 10:00 UTC, two hours after the Monday daily-refresh (08:00
+  #     # UTC), which is the run that lands Friday's settled close. Any earlier
+  #     # and the "week" the report covers would be missing its final session.
+  #     - cron: "0 10 * * 1"
   workflow_dispatch:
     inputs:
       inject_fault:

@@ -1,12 +1,24 @@
 name: daily-refresh
 
 on:
-  schedule:
-    # 08:00 UTC on weekdays = 16:00 SGT (UTC+8), same calendar day.
-    # That is 04:00 ET, before the US open, so each run ingests the most
-    # recent settled close: Mon picks up Friday, Tue-Fri pick up the prior
-    # weekday. Every session lands exactly once, one day behind.
-    - cron: "0 8 * * 1-5"
+  # Unscheduled on purpose. This workflow is the only thing that writes to
+  # Snowflake, and an unattended cron kept the warehouse and the ingest running
+  # with nobody watching the spend. It now refreshes only when dispatched.
+  #
+  # To restore the nightly refresh, put this back:
+  #
+  #   schedule:
+  #     # 08:00 UTC on weekdays = 16:00 SGT (UTC+8), same calendar day.
+  #     # That is 04:00 ET, before the US open, so each run ingests the most
+  #     # recent settled close: Mon picks up Friday, Tue-Fri pick up the prior
+  #     # weekday. Every session lands exactly once, one day behind.
+  #     - cron: "0 8 * * 1-5"
+  #
+  # Nothing downstream assumed the cron: ingest.py re-pulls a trailing 6-month
+  # window and upserts on (ticker, trade_date), and fct_prices merges over a
+  # 30-day lookback, so a dispatched run after any gap still lands every missed
+  # session. The pipeline catches up rather than needing a backfill.
+
   # A fault is a dispatch input rather than a long-lived demo branch. The three
   # demo/* branches this replaces had to be rebased after every structural
   # change, drifted stale, and left an open PR that put an intentional break one
