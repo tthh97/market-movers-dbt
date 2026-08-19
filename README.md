@@ -236,7 +236,7 @@ approve, and always leaves `main` untouched.
 
 ## Notes / honest caveats
 
-- This is a **portfolio project**, not production. The marts are descriptive
+- This is a **demonstration project**, not production. The marts are descriptive
   analytics, **not** trading or investment advice.
 - History is durable on Snowflake, where `fct_prices` merges incrementally across
   runs. The DuckDB path is rebuilt from scratch each time and is meant for offline

@@ -16,7 +16,7 @@ design-rationale docs. This baseline is already above most production pipelines.
 ### Phase 1 - Visibility (one weekend)
 
 The project's biggest gap is not rigor, it's *visible* rigor. CI runs only on
-schedule/dispatch, so a recruiter opening a PR sees no checks; docs are
+schedule/dispatch, so anyone opening a PR sees no checks; docs are
 generated in CI but only uploaded as an artifact nobody clicks.
 
 1. **PR-triggered CI.** New `ci.yml` on `pull_request`: checkout →
@@ -45,9 +45,8 @@ shape; nothing currently checks the *math*.
    the 1d/5d returns, running peak, and drawdown are known by hand; a small
    series with a known correlation. Put them in the model YAML under
    `unit_tests:`. Three or four cases, not exhaustive coverage. *Earns its
-   place because it closes the one test category the project lacks, and it's
-   the strongest interview differentiator - almost no portfolio dbt project
-   has them.*
+   place because it closes the one test category the project lacks, and
+   almost no dbt project of this size has them.*
 
 **Done when:** `dbt test --select test_type:unit` passes with 3-4 cases
 covering returns, drawdown, and correlation, and the README's test count
@@ -90,7 +89,7 @@ anomaly monitor has fired (use `inject_fault` to prove it).
   infra work with no new story.
 - **Slim CI / state deferral** - solves a build-time problem this project
   doesn't have; the full offline build takes seconds. (Knowing *why* it's
-  unnecessary here is itself an interview answer.)
+  unnecessary here is worth more than adopting it.)
 - **Great Expectations standalone, Datadog-style monitoring, Kubernetes,
   dbt Cloud** - each duplicates something the repo already does with lighter
   tools, at this scale.

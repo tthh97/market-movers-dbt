@@ -88,8 +88,8 @@ GRANT SELECT ON FUTURE VIEWS     IN SCHEMA <DATABASE>.<ANALYTICS_SCHEMA> TO ROLE
 GRANT ROLE <LOADER_ROLE>, <TRANSFORMER_ROLE>, <REPORTER_ROLE> TO ROLE SYSADMIN;
 ```
 
-The three-role split is small effort and it is the thing interviewers ask
-about when they say "how do you handle access control?"
+The three-role split is small effort and it is the standard answer to
+"how do you handle access control?"
 
 ---
 
@@ -227,7 +227,7 @@ Most of it ports untouched. The parts that need attention:
 | `dbt_utils` | mostly fine | mostly fine, re-run `dbt deps` |
 | Incremental | limited | `incremental_strategy='merge'` with `unique_key` |
 
-The new material worth building (this is what moves the resume, not the
+The new material worth building (this is where the value is, not the
 port itself):
 
 1. **Incremental models** on the fact layer with `merge` strategy -

@@ -44,7 +44,7 @@ Verified in sandbox: `python report_evals.py --offline` → 10/10 PASS; `_DuckDB
 - Repo voice: comments explain *why*, design choices are written down where they live.
 - CI: third-party actions pinned to commit SHAs; secrets never interpolated into shell; cheap offline stage always gates the paid stage.
 - Agents: read-only warehouse access enforced by grants/engine, not prompts; every number must come from a query result; no investment advice (`policy.SYSTEM_PROMPT` is reused as the writer's base).
-- User context: portfolio/interview-first, solid SQL but new to dbt, no deadline. Prefers concise communication.
+- User context: solid SQL but new to dbt, no deadline. Prefers concise communication.
 
 ## Open threads
 
