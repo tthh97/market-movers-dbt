@@ -37,6 +37,11 @@ venv/
 # macOS
 .DS_Store
 
+# Agent scratch: session state and the throwaway worktrees agents check out
+# into. Holds old copies of tracked files, so committing it would resurrect
+# text that was deliberately edited out.
+.claude/
+
 # Lavish Editor review sessions (not part of the pipeline)
 .lavish/
 exports/

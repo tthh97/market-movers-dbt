@@ -96,15 +96,3 @@ credentials, the same code path the agent runs against Snowflake in prod.
   the recorder (trace vs. evidence notebook). Do after ticket A. This supersedes
   `agent/agent.py:2-8`'s "deliberately visible loop" rationale, so it needs an
   ADR when done.
-
-## Interview lines (the crib)
-
-- **QueryRunner:** "Five places each connected, checked the SQL was read-only,
-  ran it, and formatted rows - copy-pasted. I pulled it into one QueryRunner:
-  give it SQL, get rows back, and the read-only guard is inside so nothing can
-  bypass it. Snowflake in prod, DuckDB offline, same interface."
-- **Key-loader:** "The code that loads the Snowflake key was pasted in three
-  files. I made it one helper - one place to change when auth changes."
-- **Testability:** "I didn't have to mock the warehouse. DuckDB is a real
-  read-only version of the same interface, so my tests run the exact same code
-  path the agent runs against Snowflake, just offline."
