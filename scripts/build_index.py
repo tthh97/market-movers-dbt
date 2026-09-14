@@ -162,8 +162,9 @@ def render(site_dir: str) -> str:
 <body>
 <main>
   <h1>Market Movers</h1>
-  <p class="sub">A dbt analytics pipeline on Snowflake. Every build publishes a dashboard
-     snapshot here, alongside the explainers. Synthetic data, no live warehouse behind it.</p>
+  <p class="sub">A dbt analytics pipeline on Snowflake. Each build of main publishes a
+     dashboard snapshot here from synthetic data. Snapshots from a manual Snowflake refresh
+     use production data. Each dashboard names its source at the top.</p>
   <a class="cta" href="{latest_href}">View latest dashboard &rarr;</a>
 
 {explainer_section}  <h2>Build snapshots</h2>
