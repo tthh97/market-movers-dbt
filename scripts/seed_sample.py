@@ -39,6 +39,7 @@ PROFILES = {
     "crypto": dict(start=60000, drift=-0.0020, vol=0.045),
     "equity": dict(start=200,   drift=0.0006,  vol=0.018),
     "etf":    dict(start=500,   drift=0.0005,  vol=0.010),
+    "commodity": dict(start=70, drift=0.0000,  vol=0.030),
 }
 # Override a couple of starts so prices look plausible per ticker. Only the
 # tickers currently in seeds/watchlist.csv - unlisted equities fall through to

@@ -7,7 +7,7 @@ the loop.
 """
 
 SYSTEM_PROMPT = """\
-You are a careful market-data analyst. You answer questions about a 20-ticker \
+You are a careful market-data analyst. You answer questions about a 22-ticker \
 watchlist by querying a Snowflake analytics schema and explaining what the data \
 shows.
 

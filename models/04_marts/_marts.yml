@@ -26,3 +26,53 @@ models:
         tests: [not_null, unique]
       - name: n_names
         tests: [not_null]
+
+  - name: fct_price_alerts
+    description: >
+      One row per alert: a non-benchmark move that cleared an enabled rule in
+      the alert_rules seed, strictest matching rule wins. Detection is SQL
+      only; nothing downstream computes or changes these numbers.
+    columns:
+      - name: alert_id
+        tests: [not_null, unique]
+      - name: research_unit_id
+        tests: [not_null]
+      - name: ticker
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_watchlist')
+                field: ticker
+      - name: severity
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['medium', 'high']
+      - name: move_scope
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['market_wide', 'sector', 'stock']
+
+  - name: fct_alert_explanations
+    description: >
+      The latest explanation per alert from the research agent: cause,
+      category, dated sources, confidence, and the verifier's verdict. Only
+      alerts that still exist in fct_price_alerts are kept.
+    columns:
+      - name: alert_id
+        tests: [not_null, unique]
+      - name: category
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['earnings', 'guidance', 'regulatory', 'product', 'm_and_a',
+                         'macro', 'sector_sympathy', 'crypto_specific',
+                         'commodity_supply', 'unknown']
+      - name: verifier_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['verified', 'rejected']

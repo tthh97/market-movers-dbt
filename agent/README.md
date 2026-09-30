@@ -63,8 +63,9 @@ Layer 3 is what makes writes impossible.
 
 ## Data shape worth knowing
 
-- 20 tickers: 15 equities across tech / industrials / financials, 3 crypto, and
-  SPY + QQQ as **benchmarks, not holdings** - exclude them when ranking movers.
+- 22 tickers: 15 equities across tech / industrials / financials, 3 crypto, 2
+  commodity funds (USO oil, UNG natural gas), and SPY + QQQ as **benchmarks, not
+  holdings** - exclude them when ranking movers.
 - **"Latest date" is not one date.** Crypto trades daily; equities and ETFs do
   not, and lag by a day or more. Always take the max from the rows you are
   reporting on, never a global `max(trade_date)`.

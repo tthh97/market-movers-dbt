@@ -17,6 +17,16 @@ vars:
   # assert_fct_prices_complete exists to make loud. ~570 rows at 30 days here.
   fct_prices_lookback_days: 30
 
+  # Price alerts. Detection is SQL and every knob lives here or in the
+  # alert_rules seed, so a threshold change is a reviewed diff. Starting
+  # values, to be tuned from alert volumes on real data, not guessed further.
+  alert_vol_window_days: 60      # trailing returns used for a ticker's own volatility
+  alert_min_history_days: 20     # fewer prior returns than this: no z, no alert
+  scope_market_ticker: SPY       # the series that stands for "the market"
+  scope_market_z: 2.0            # its |z| at or above this, same sign: market-wide
+  scope_peer_z: 1.0              # a peer "moved with it" at |z| at or above this, same sign
+  scope_peer_share: 0.5          # share of sector peers that must move with it: sector-wide
+
 models:
   market_movers:
     # Folder names carry the build order: staging -> fact -> intermediate -> marts.
@@ -40,3 +50,7 @@ seeds:
       +column_types:
         is_holding: boolean
         is_benchmark: boolean
+    alert_rules:
+      +column_types:
+        z_threshold: double
+        enabled: boolean
