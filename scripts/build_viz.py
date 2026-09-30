@@ -8,19 +8,19 @@ narrative it embeds is the one artefact this script does not compute, and it is
 only ever read from a report the publication gate already passed - see
 _load_narrative below.
 
-Two backends, the same split report.py uses:
+Two backends, picked by DBT_TARGET like everything else in the repo:
 
-  VIZ_TARGET=snowflake (default) - the real marts, via the standard
+  DBT_TARGET=snowflake (default) - the real marts, via the standard
       SNOWFLAKE_* variables. Locally those resolve to the read-only REPORTER
       identity in agent/.env; in CI they are already exported by the dbt step,
       so the dashboard needs no secret of its own.
-  VIZ_TARGET=duckdb - the repo's market.duckdb, opened read_only=True. This is
+  DBT_TARGET=duckdb - the repo's market.duckdb, opened read_only=True. This is
       what CI stage 1 runs: it proves the generator works before stage 2 spends
       anything on Snowflake.
 
 Usage (from the project root, with the project venv):
     .venv/bin/python3 scripts/build_viz.py
-    VIZ_TARGET=duckdb .venv/bin/python3 scripts/build_viz.py
+    DBT_TARGET=duckdb .venv/bin/python3 scripts/build_viz.py
 
 This replaced an earlier CSV export whose output still had to be rendered by
 hand afterwards. A dashboard that needs a human in the loop is not a layer.
@@ -57,24 +57,24 @@ load_dotenv(os.path.join(ROOT, "agent", ".env"))
 # because the dashboard aggregates over the whole result, not its first page.
 # ---------------------------------------------------------------------------
 
-sys.path.insert(0, os.path.join(ROOT, "agent"))
+sys.path[:0] = [ROOT, os.path.join(ROOT, "agent")]
 import query  # noqa: E402 - the shared read-only QueryRunner lives in agent/
+import warehouse  # noqa: E402 - the engine switch and the DuckDB path
 
 
 class _Backend:
-    def __init__(self, engine: str):
-        self._runner = query.QueryRunner(engine)
-        if engine == "snowflake":
+    def __init__(self):
+        self._runner = query.QueryRunner()
+        self.engine = self._runner.engine
+        if self.engine == "snowflake":
             self.label = "Snowflake"
             self.detail = (
-                f'{query.require("SNOWFLAKE_DATABASE")}.'
-                f'{query.require("SNOWFLAKE_SCHEMA")}'
+                f'{warehouse.require("SNOWFLAKE_DATABASE")}.'
+                f'{warehouse.require("SNOWFLAKE_SCHEMA")}'
             )
         else:
             self.label = "DuckDB"
-            path = os.environ.get(
-                "MARKET_DUCKDB_PATH", os.path.join(ROOT, "market.duckdb"))
-            self.detail = os.path.basename(path)
+            self.detail = os.path.basename(warehouse.DUCKDB_PATH)
 
     def rows(self, sql: str) -> list[dict]:
         result = self._runner.run(sql, limit=None)
@@ -99,11 +99,6 @@ class _Backend:
 
     def close(self) -> None:
         self._runner.close()
-
-
-def _backend():
-    target = os.environ.get("VIZ_TARGET", "snowflake").lower()
-    return _Backend("duckdb" if target == "duckdb" else "snowflake")
 
 
 # ---------------------------------------------------------------------------
@@ -1231,8 +1226,7 @@ def main() -> None:
                     help="output path, or a directory (written as index.html)")
     args = ap.parse_args()
 
-    target = os.environ.get("VIZ_TARGET", "snowflake").lower()
-    backend = _backend()
+    backend = _Backend()
     try:
         price_rows = backend.rows(Q_PRICES)
         idx, all_dates = sector_index(price_rows)
@@ -1248,7 +1242,7 @@ def main() -> None:
             "price_series": price_series(price_rows),
             "index": idx,
             "dates": all_dates,
-            "target": target,
+            "target": backend.engine,
             "source_label": backend.label,
             "source_detail": backend.detail,
         }

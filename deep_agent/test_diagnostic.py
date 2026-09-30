@@ -37,7 +37,7 @@ OUTPUTS = os.path.join(WORKSPACE, "outputs")
 load_dotenv(os.path.join(HERE, ".env"), override=True)
 load_dotenv(os.path.join(os.path.dirname(HERE), "agent", ".env"), override=False)
 
-from tools import ENGINE, _get_runner  # noqa: E402
+from tools import ENGINE, get_runner  # noqa: E402
 
 API_URL = os.environ.get("DEEP_AGENT_API_URL", "http://127.0.0.1:2024")
 ASSISTANT = "agent"
@@ -101,7 +101,7 @@ async def ask(client, thread_id: str, text: str, on_interrupt: str | None = "app
 
 def expected_top_mover() -> tuple[str, str]:
     """The biggest non-benchmark 1-day return, straight from the warehouse."""
-    r = _get_runner().run(
+    r = get_runner().run(
         "select ticker, as_of_date from mart_movers where sector <> 'benchmark' "
         "order by ret_1d desc limit 1"
     )

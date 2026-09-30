@@ -111,7 +111,7 @@ two LLMs agreeing is not a harness. Code checks what code can check
 
 ```bash
 python report.py                                  # Snowflake, same read-only role
-REPORT_TARGET=duckdb python report.py             # offline demo, engine-enforced read_only
+DBT_TARGET=duckdb python report.py                # offline demo, engine-enforced read_only
 python report.py --inject-fault fabricated_number # watch the gate block it
 python report_evals.py                            # the gate's own evals (offline tier needs no key)
 ```

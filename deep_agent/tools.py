@@ -38,12 +38,12 @@ import query  # noqa: E402  (agent/query.py, the shared read-only seam)
 MAX_ROWS = query.DEFAULT_ROW_LIMIT   # rows returned to the model per query
 MAX_QUERIES = 12                     # per delegation, same cap as the chat agent
 
-ENGINE = os.environ.get("DEEP_AGENT_ENGINE", "snowflake").strip().lower()
+ENGINE = query.target()   # DBT_TARGET, the repo's one engine switch
 
 _runner: query.QueryRunner | None = None
 
 
-def _get_runner() -> query.QueryRunner:
+def get_runner() -> query.QueryRunner:
     """One read-only runner per process, opened lazily and reused."""
     global _runner
     if _runner is None:
@@ -86,7 +86,7 @@ def run_sql(query_text: str, runtime: ToolRuntime) -> str:
             f"ERROR: query budget of {MAX_QUERIES} reached for this task. Answer "
             "with what you already have, and say which part is unanswered."
         )
-    return query.render_for_model(_get_runner().run(query_text, limit=MAX_ROWS))
+    return query.render_for_model(get_runner().run(query_text, limit=MAX_ROWS))
 
 
 def _schema_sql() -> str:
@@ -127,7 +127,7 @@ def get_schema() -> str:
     role can actually select. Call it before writing SQL against a table whose
     columns are not already in your memory.
     """
-    result = _get_runner().run(_schema_sql(), limit=None)
+    result = get_runner().run(_schema_sql(), limit=None)
     if result.is_error:
         return result.error.replace("SQL ERROR:", "SCHEMA ERROR:", 1)
     if not result.rows:

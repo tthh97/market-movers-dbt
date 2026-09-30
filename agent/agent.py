@@ -116,11 +116,12 @@ def run(question: str, verbose: bool = True) -> str:
     tools.reset_budget()
     trace = Trace(question)
     messages = [{"role": "user", "content": question}]
+    resp = None
 
     try:
         for turn in range(1, MAX_TURNS + 1):
             if trace.in_tok + trace.out_tok > TOKEN_BUDGET:
-                answer = _text(resp) if turn > 1 else ""
+                answer = _text(resp) if resp is not None else ""
                 note = "Stopped: token budget reached before a final answer."
                 trace.finish(answer or note, "token_budget")
                 return answer or note
