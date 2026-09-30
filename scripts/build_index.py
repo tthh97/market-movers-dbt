@@ -163,8 +163,8 @@ def render(site_dir: str) -> str:
 <main>
   <h1>Market Movers</h1>
   <p class="sub">A dbt analytics pipeline on Snowflake. Each build of main publishes a
-     dashboard snapshot here from synthetic data. Snapshots from a manual Snowflake refresh
-     use production data. Each dashboard names its source at the top.</p>
+     dashboard snapshot here from synthetic data. Snapshots from a manual refresh use live
+     market data. Each dashboard names its source at the top.</p>
   <a class="cta" href="{latest_href}">View latest dashboard &rarr;</a>
 
 {explainer_section}  <h2>Build snapshots</h2>
