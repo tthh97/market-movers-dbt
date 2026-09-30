@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>27 tests, and the one that mattered</title>
+<meta name="description" content="How a completeness test caught 34 rows that 26 green tests could not see.">
+<style>
+:root{color-scheme:light;
+--surface-1:#fcfcfb;--page:#f9f9f7;--text-primary:#0b0b0b;--text-secondary:#52514e;
+--text-muted:#898781;--grid:#e1e0d9;--baseline:#c3c2b7;--border:rgba(11,11,11,.10);
+--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--pos:#2a78d6;--neg:#e34948;
+--shade:rgba(227,73,72,.07);}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){color-scheme:dark;
+--surface-1:#1a1a19;--page:#0d0d0d;--text-primary:#fff;--text-secondary:#c3c2b7;
+--text-muted:#898781;--grid:#2c2c2a;--baseline:#383835;--border:rgba(255,255,255,.10);
+--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--pos:#3987e5;--neg:#e66767;
+--shade:rgba(230,103,103,.10);}}
+:root[data-theme=dark]{color-scheme:dark;
+--surface-1:#1a1a19;--page:#0d0d0d;--text-primary:#fff;--text-secondary:#c3c2b7;
+--text-muted:#898781;--grid:#2c2c2a;--baseline:#383835;--border:rgba(255,255,255,.10);
+--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--pos:#3987e5;--neg:#e66767;
+--shade:rgba(230,103,103,.10);}
+
+*,*::before,*::after{box-sizing:border-box}
+:where(.grid,.flex)>*{min-width:0}
+:where(p,h1,h2,h3,li,td,th,figcaption){overflow-wrap:anywhere}
+:where(img,svg,canvas){max-width:100%}
+body{margin:0;background:var(--page);color:var(--text-primary);line-height:1.55;
+font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;}
+.wrap{max-width:940px;margin:0 auto;padding:32px 20px 72px;}
+
+h1{font-size:25px;font-weight:600;margin:0 0 6px;letter-spacing:-.01em}
+h2{font-size:17px;font-weight:600;margin:0 0 2px}
+h3{font-size:14px;font-weight:600;margin:0 0 6px}
+.sub{color:var(--text-muted);font-size:13px}
+.lede{color:var(--text-secondary);font-size:14.5px;margin:0 0 26px;max-width:66ch}
+.eyebrow{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;
+color:var(--text-muted);font-weight:500;margin:34px 0 10px}
+.eyebrow:first-of-type{margin-top:26px}
+
+.card{background:var(--surface-1);border:.5px solid var(--border);border-radius:10px;
+padding:18px 20px;margin:0 0 16px;}
+.card>.sub{margin:0 0 14px}
+.card p{font-size:14.5px;color:var(--text-secondary);margin:0 0 10px}
+.card p:last-child{margin-bottom:0}
+.card p strong{color:var(--text-primary);font-weight:600}
+
+.quote{border-left:3px solid var(--s1);padding:2px 0 2px 16px;margin:0 0 26px;
+color:var(--text-secondary);font-size:14.5px;max-width:70ch}
+.quote em{color:var(--text-primary);font-style:normal;font-weight:600}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin:0 0 22px}
+.kpi{background:var(--surface-1);border:.5px solid var(--border);border-radius:10px;padding:13px 15px}
+.kpi .v{font-size:22px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums}
+.kpi .k{font-size:12px;color:var(--text-muted);margin-top:3px}
+.kpi.bad .v{color:var(--neg)}
+.kpi.good .v{color:var(--s3)}
+
+.two{display:grid;grid-template-columns:1fr;gap:16px;margin:0 0 16px}
+@media(min-width:760px){.two{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.two>.card{margin:0;height:100%}
+.card.flag{border-left:3px solid var(--neg)}
+.card.ok{border-left:3px solid var(--s3)}
+
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:7px 10px;border-bottom:.5px solid var(--border);vertical-align:top}
+/* Test names are single unbreakable tokens; let the wrapper scroll rather than
+   hyphenating them mid-identifier. */
+td:first-child,th:first-child{white-space:nowrap;overflow-wrap:normal}
+td.n,th.n{text-align:right;white-space:nowrap;font-weight:600}
+th{color:var(--text-muted);font-weight:500;font-size:11.5px;text-transform:uppercase;
+letter-spacing:.04em}
+tbody tr:last-child td{border-bottom:none}
+tr.total td{border-top:1px solid var(--baseline);border-bottom:none;font-weight:600;
+color:var(--text-primary)}
+.scroll{overflow-x:auto}
+code{background:var(--page);border:.5px solid var(--border);padding:1px 5px;border-radius:4px;
+font-size:.88em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.card code{background:var(--page)}
+
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin:14px 0 0;font-size:12.5px;
+color:var(--text-secondary)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:11px;height:11px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.legend i.sq{border-radius:3px}
+
+.banner{background:var(--surface-1);border:.5px solid var(--border);
+border-left:3px solid var(--s4);border-radius:8px;padding:12px 15px;margin:0 0 22px;
+font-size:13.5px;color:var(--text-secondary)}
+.banner strong{color:var(--text-primary)}
+
+.pierre{border:.5px solid var(--border);border-radius:10px;overflow:hidden;margin:0 0 8px;
+background:var(--surface-1)}
+.pierre :where(pre,code){font-size:12.5px}
+.caption{font-size:12.5px;color:var(--text-muted);margin:0 0 20px}
+.mermaid{background:var(--surface-1);border:.5px solid var(--border);border-radius:10px;
+padding:18px;margin:0 0 8px;text-align:center}
+.mermaid svg{max-width:100%;height:auto}
+
+ul.plain{margin:0;padding:0 0 0 18px;font-size:14.5px;color:var(--text-secondary)}
+ul.plain li{margin:0 0 7px}
+ul.plain li:last-child{margin-bottom:0}
+ul.plain strong{color:var(--text-primary);font-weight:600}
+.foot{color:var(--text-muted);font-size:12.5px;margin:28px 0 0;padding-top:16px;
+border-top:.5px solid var(--border)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>27 tests, and the one that mattered</h1>
+  <p class="lede">A walk through the data-quality layer of this pipeline, from the bottom up:
+  what the 27 dbt tests actually are, why 26 of them reported green over a table with holes in
+  it for eleven days, and what the 27th does differently.</p>
+
+  <p class="quote"><em>A test suite made entirely of shape tests will tell you the rows you have
+  are clean. It will never tell you a row is missing.</em> This page is about the day that
+  distinction cost 34 rows of production data, and the test that now makes it loud.</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v">27</div><div class="k">data tests, all passing</div></div>
+    <div class="kpi bad"><div class="v">34</div><div class="k">rows missing in production</div></div>
+    <div class="kpi bad"><div class="v">11</div><div class="k">days it went unnoticed</div></div>
+    <div class="kpi good"><div class="v">1</div><div class="k">test that could see it</div></div>
+  </div>
+
+  <p class="eyebrow">Part 1 &middot; What the 27 tests are</p>
+
+  <div class="card">
+    <p>Almost all of them are one line of YAML. You attach an expectation to a column, and dbt
+    generates the SQL that looks for rows breaking it. A test passes when it finds
+    <strong>zero rows</strong>. Two of the 27 are hand-written SQL files instead, because the
+    question they ask does not fit a column-level rule.</p>
+  </div>
+
+  <div class="scroll card">
+    <table>
+      <thead>
+        <tr>
+          <th>Kind</th><th class="n">Count</th><th>What one of them means</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>not_null</code></td><td class="n">15</td>
+          <td>This column is never blank. 13 on models, 2 on the raw source.</td>
+        </tr>
+        <tr>
+          <td><code>unique</code></td><td class="n">7</td>
+          <td>No value appears twice. This is what enforces the grain: one row per ticker per day.</td>
+        </tr>
+        <tr>
+          <td><code>accepted_values</code></td><td class="n">2</td>
+          <td>Sector is one of tech, industrials, financials, crypto, benchmark. Nothing else.</td>
+        </tr>
+        <tr>
+          <td><code>relationships</code></td><td class="n">1</td>
+          <td>Every ticker in the fact resolves to a real row in the watchlist.</td>
+        </tr>
+        <tr>
+          <td><code>assert_positive_close_price</code></td><td class="n">1</td>
+          <td>Custom SQL. A clean price feed never contains a close of zero or less.</td>
+        </tr>
+        <tr>
+          <td><code>assert_fct_prices_complete</code></td><td class="n">1</td>
+          <td>Custom SQL. <strong>The subject of this page.</strong> Every ticker-day the source holds also exists in the fact.</td>
+        </tr>
+        <tr class="total"><td>Total</td><td class="n">27</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="eyebrow">Part 2 &middot; The blind spot</p>
+
+  <div class="two">
+    <div class="card ok">
+      <h3>What 26 of them check</h3>
+      <p>That the rows which <strong>are</strong> in the table are well formed. No blanks, no
+      duplicates, no stray sector names, no orphan tickers, no negative prices.</p>
+      <p>Every one of these passes on a table of 100 rows. Every one also passes on the same
+      table with 34 rows quietly removed. Removing a row never creates a null, a duplicate, or
+      a bad value.</p>
+    </div>
+    <div class="card flag">
+      <h3>What none of them checked</h3>
+      <p>That the rows which <strong>should</strong> be there are there.</p>
+      <p>This is the whole lesson. Shape and presence are different questions, and a suite made
+      entirely of shape tests reports green on missing data forever. An empty table would have
+      passed all 26.</p>
+    </div>
+  </div>
+
+  <div class="banner">
+    <strong>The trap in the relationships test.</strong> It looks like it covers this and does
+    not. It checks that every ticker in the fact exists in the watchlist, which is the opposite
+    direction of travel. A fact table with nothing in it satisfies that perfectly.
+  </div>
+
+  <p class="eyebrow">Part 3 &middot; How the rows went missing</p>
+
+  <div class="card">
+    <p>The fact table is <strong>incremental</strong>: each nightly run should process only new
+    rows, not rebuild everything. The old code decided what counted as new by looking at the
+    newest date it had already stored, and taking anything from that date onward. That marker
+    is called a <strong>high-water mark</strong>, and it only ever moves forward.</p>
+    <p>That is fine as long as nothing ever arrives dated in the past. Your watchlist breaks
+    that assumption, because it mixes two trading calendars.</p>
+  </div>
+
+  <div class="card">
+    <svg viewBox="0 0 880 272" role="img" aria-label="Timeline showing the high-water mark sitting at August 4 because crypto trades daily, while two equity dates below it are blocked.">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--text-muted)"/>
+        </marker>
+      </defs>
+
+      <!-- shaded blocked region -->
+      <rect x="142" y="34" width="567" height="150" fill="var(--shade)"/>
+      <text x="148" y="28" font-size="11.5" fill="var(--text-muted)">
+        filtered out before the MERGE ever sees it
+      </text>
+
+      <!-- date columns -->
+      <g font-size="10.5" fill="var(--text-muted)" text-anchor="middle" font-variant-numeric="tabular-nums">
+        <text x="175" y="205">07-27</text><text x="175" y="219" font-size="9.5">Mon</text>
+        <text x="242" y="205">07-28</text><text x="242" y="219" font-size="9.5">Tue</text>
+        <text x="308" y="205">07-29</text><text x="308" y="219" font-size="9.5">Wed</text>
+        <text x="375" y="205">07-30</text><text x="375" y="219" font-size="9.5">Thu</text>
+        <text x="441" y="205">07-31</text><text x="441" y="219" font-size="9.5">Fri</text>
+        <text x="508" y="205">08-01</text><text x="508" y="219" font-size="9.5">Sat</text>
+        <text x="574" y="205">08-02</text><text x="574" y="219" font-size="9.5">Sun</text>
+        <text x="641" y="205">08-03</text><text x="641" y="219" font-size="9.5">Mon</text>
+        <text x="707" y="205">08-04</text><text x="707" y="219" font-size="9.5">Tue</text>
+        <text x="774" y="205">08-05</text><text x="774" y="219" font-size="9.5">Wed</text>
+        <text x="840" y="205">08-06</text><text x="840" y="219" font-size="9.5">Thu</text>
+      </g>
+      <line x1="142" y1="188" x2="872" y2="188" stroke="var(--baseline)" stroke-width="1"/>
+
+      <!-- lane labels, in their own gutter -->
+      <text x="2" y="97"  font-size="11.5" fill="var(--text-secondary)" font-weight="500">Crypto</text>
+      <text x="2" y="111" font-size="10" fill="var(--text-muted)">3 tickers, 7 days a week</text>
+      <text x="2" y="165" font-size="11.5" fill="var(--text-secondary)" font-weight="500">Equities + ETFs</text>
+      <text x="2" y="179" font-size="10" fill="var(--text-muted)">17 tickers, weekdays only</text>
+
+      <!-- crypto lane: every day through 08-04 -->
+      <g fill="var(--s1)">
+        <circle cx="175" cy="100" r="6"/><circle cx="242" cy="100" r="6"/>
+        <circle cx="308" cy="100" r="6"/><circle cx="375" cy="100" r="6"/>
+        <circle cx="441" cy="100" r="6"/><circle cx="508" cy="100" r="6"/>
+        <circle cx="574" cy="100" r="6"/><circle cx="641" cy="100" r="6"/>
+        <circle cx="707" cy="100" r="6"/>
+      </g>
+
+      <!-- equity lane: weekdays; 07-28 and 08-03 are the holes -->
+      <g fill="var(--s3)">
+        <circle cx="175" cy="168" r="6"/><circle cx="308" cy="168" r="6"/>
+        <circle cx="375" cy="168" r="6"/><circle cx="441" cy="168" r="6"/>
+      </g>
+      <g fill="none" stroke="var(--neg)" stroke-width="2" stroke-dasharray="3 2.5">
+        <circle cx="242" cy="168" r="6"/><circle cx="641" cy="168" r="6"/>
+      </g>
+      <g font-size="10.5" fill="var(--neg)" text-anchor="middle" font-weight="600">
+        <text x="242" y="151">17 rows</text>
+        <text x="641" y="151">17 rows</text>
+      </g>
+
+      <!-- weekend marker -->
+      <text x="541" y="172" font-size="10" fill="var(--text-muted)" text-anchor="middle">market closed</text>
+
+      <!-- the mark -->
+      <line x1="709" y1="34" x2="709" y2="192" stroke="var(--neg)" stroke-width="2"/>
+      <text x="719" y="46" font-size="11.5" fill="var(--neg)" font-weight="600">high-water mark = 08-04</text>
+      <text x="719" y="60" font-size="10.5" fill="var(--text-muted)">set by crypto, not by equities</text>
+
+      <!-- backfill arrows -->
+      <text x="820" y="100" font-size="10.5" fill="var(--text-secondary)" text-anchor="middle">backfill</text>
+      <text x="820" y="113" font-size="10.5" fill="var(--text-secondary)" text-anchor="middle">arrives</text>
+      <g stroke="var(--text-muted)" stroke-width="1.1" fill="none" opacity=".55" stroke-dasharray="4 3">
+        <path d="M 806 126 Q 740 150 662 158" marker-end="url(#ar)"/>
+        <path d="M 806 126 Q 460 244 262 178" marker-end="url(#ar)"/>
+      </g>
+
+      <text x="2" y="258" font-size="12" fill="var(--text-secondary)">
+        17 tickers &times; 2 dates = <tspan font-weight="600" fill="var(--neg)">34 rows</tspan>, sitting to the left of the mark, permanently unreachable.
+      </text>
+    </svg>
+    <div class="legend">
+      <span><i style="background:var(--s1)"></i>crypto row, stored</span>
+      <span><i style="background:var(--s3)"></i>equity row, stored</span>
+      <span><i class="sq" style="background:transparent;border:2px dashed var(--neg)"></i>arrived late, rejected</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <p>Crypto trades every day. Equities do not. So the newest date in the table is
+    <strong>always</strong> a crypto date, dragged forward across weekends while the equity
+    calendar sits behind it. On 2026-08-06 a backfill carried equity rows for 07-28 and 08-03.
+    Both were below the mark, so both were discarded.</p>
+    <p>The reason it lasted 11 days is the cruel part: <strong>the same filter that caused the
+    gap also blocked every attempt to repair it.</strong> The mark never moves backward, so
+    those rows could never arrive on any later run either.</p>
+  </div>
+
+  <p class="eyebrow">Part 4 &middot; Why the filter is the point of no return</p>
+
+  <div class="mermaid">
+flowchart TD
+    A["A row arrives from source: NVDA, 2026-07-28"] --> B{"WHERE trade_date &gt;= mark?"}
+    B -- "yes" --> D["MERGE on price_key (ticker + trade_date)"]
+    B -- "no, it is older" --> C["Discarded. It never reaches the MERGE."]
+    D --> E["Row inserted, or existing row updated"]
+    E --> G["fct_prices complete"]
+    C -.-> F["fct_prices stays 34 rows short, and all 26 shape tests still pass"]
+</div>
+  <p class="caption">The <code>WHERE</code> runs first. People assume the MERGE decides what
+  happens to a row, but a row filtered out upstream is invisible to it, so there is nothing to
+  update and nothing to insert.</p>
+
+  <p class="eyebrow">Part 5 &middot; The 27th test</p>
+
+  <div class="card">
+    <p>An <strong>anti-join</strong>: list every ticker-day the source has, look for its match
+    in the fact table, and return the ones that found nothing. Zero rows returned means nothing
+    is missing. It compares against a view over current raw data, so it re-evaluates on every
+    run rather than hardcoding an expected count that would go stale.</p>
+  </div>
+
+  <div class="pierre" id="test-file"></div>
+  <p class="caption"><code>tests/assert_fct_prices_complete.sql</code> &middot; run against production
+  before the fix, this alone failed with <code>Got 34 results</code>.</p>
+
+  <p class="eyebrow">Part 6 &middot; The fix</p>
+
+  <div class="pierre" id="fix-diff"></div>
+  <p class="caption"><code>models/02_fact/fct_prices.sql</code> &middot; reach back a window from
+  the mark instead of starting at it.</p>
+
+  <div class="card">
+    <p>Re-reading days already stored costs nothing, because the MERGE upserts on
+    <code>price_key</code>: a day already present simply matches and gets rewritten with the
+    same values. No duplicates. <strong>That is why widening the window was safe</strong>, and
+    it is why crediting the merge strategy as the fix gets the story backwards. The merge was
+    already there. It is the precondition that made the real fix possible.</p>
+  </div>
+
+  <p class="eyebrow">Part 7 &middot; The honest limit</p>
+
+  <div class="card flag">
+    <p>The window <strong>bounds</strong> the exposure, it does not remove it. A backfill older
+    than 30 days is still dropped.</p>
+    <p>That residual risk is exactly why the test stays rather than being retired by the fix. If
+    it happens again, the build goes red instead of sitting quietly short. The window contains
+    the failure; the test is what detects it.</p>
+  </div>
+
+  <p class="eyebrow">Questions this usually raises</p>
+  <div class="card">
+    <ul class="plain">
+      <li><strong>How was it found, if nothing failed?</strong> Not from a failure. It came from
+      asking what the existing tests were structurally unable to see, then writing the one that
+      would have caught it and pointing it at production.</li>
+      <li><strong>Why not just full-refresh every night?</strong> That hides the defect instead
+      of detecting it, and it stops being affordable as history grows. The test keeps working at
+      any volume.</li>
+      <li><strong>Why 30 days?</strong> It is a variable
+      (<code>fct_prices_lookback_days</code>), not a constant. 30 days is about 570 rows here, so
+      the scan is not worth optimising, and a project with a longer backfill tail can raise it
+      without touching the model.</li>
+    </ul>
+  </div>
+
+  <p class="foot">Source for everything above:
+  <code>models/02_fact/fct_prices.sql</code>,
+  <code>tests/assert_fct_prices_complete.sql</code>, and commit <code>8ba29c7</code> in this
+  repository. Figures verified on 2026-08-09: the test count from
+  <code>dbt build --target duckdb</code> (PASS=37 = 9 models + 1 seed + 27 tests); the 34 rows,
+  the two dates and the eleven days from the commit message recording the production
+  measurement.</p>
+
+</div>
+
+<script type="module">
+  import { File, FileDiff } from "https://esm.sh/@pierre/diffs@1.2.10?bundle";
+
+  const theme = { light: "github-light", dark: "github-dark" };
+  const dark = () => document.documentElement.getAttribute("data-theme") === "dark"
+    || (document.documentElement.getAttribute("data-theme") !== "light"
+        && window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  const testFile = {
+    name: "tests/assert_fct_prices_complete.sql",
+    contents: `-- Every ticker-day the source holds must exist in the fact table.
+-- Passes only when this returns zero rows.
+
+select
+    s.ticker,
+    s.trade_date
+from {{ ref('stg_prices') }} s
+left join {{ ref('fct_prices') }} f
+    on  f.ticker     = s.ticker
+    and f.trade_date = s.trade_date
+where f.ticker is null
+`,
+  };
+
+  const oldFilter = {
+    name: "models/02_fact/fct_prices.sql",
+    contents: `{% if is_incremental() %}
+
+-- Only take rows at or after the newest date already stored.
+where trade_date >= (
+    select max(trade_date)
+    from {{ this }}
+)
+
+{% endif %}
+`,
+  };
+
+  const newFilter = {
+    name: "models/02_fact/fct_prices.sql",
+    contents: `{% if is_incremental() %}
+
+-- Reprocess a trailing WINDOW, not everything from the mark onward.
+-- The MERGE upserts on price_key, so re-reading stored days is free.
+where trade_date >= (
+    select coalesce(
+        {{ dbt.dateadd('day', -var('fct_prices_lookback_days', 30), 'max(trade_date)') }},
+        date '1900-01-01'
+    )
+    from {{ this }}
+)
+
+{% endif %}
+`,
+  };
+
+  let rendered = null;
+  function draw() {
+    const themeType = dark() ? "dark" : "light";
+    if (themeType === rendered) return;
+    rendered = themeType;
+    const options = { theme, themeType, overflow: "wrap" };
+    const fileEl = document.querySelector("#test-file");
+    const diffEl = document.querySelector("#fix-diff");
+    fileEl.innerHTML = "";
+    diffEl.innerHTML = "";
+    new File(options).render({ containerWrapper: fileEl, file: testFile });
+    new FileDiff({ ...options, diffStyle: "unified" }).render({
+      containerWrapper: diffEl,
+      oldFile: oldFilter,
+      newFile: newFilter,
+    });
+  }
+
+  draw();
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+  new MutationObserver(draw).observe(document.documentElement, {
+    attributes: true, attributeFilter: ["data-theme"],
+  });
+</script>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  const paint = document.createElement("canvas").getContext("2d");
+  function toRgba(color) {
+    paint.clearRect(0, 0, 1, 1);
+    paint.fillStyle = "#000";
+    paint.fillStyle = color;
+    paint.fillRect(0, 0, 1, 1);
+    return paint.getImageData(0, 0, 1, 1).data;
+  }
+  function compositeRgba(foreground, background) {
+    const fa = foreground[3] / 255, ba = background[3] / 255;
+    const alpha = fa + ba * (1 - fa);
+    if (alpha === 0) return [0, 0, 0, 0];
+    return [
+      (foreground[0] * fa + background[0] * ba * (1 - fa)) / alpha,
+      (foreground[1] * fa + background[1] * ba * (1 - fa)) / alpha,
+      (foreground[2] * fa + background[2] * ba * (1 - fa)) / alpha,
+      alpha * 255,
+    ];
+  }
+  function pageIsDark() {
+    const root = document.documentElement;
+    const rootBackground = toRgba(getComputedStyle(root).backgroundColor);
+    const bodyBackground = document.body ? toRgba(getComputedStyle(document.body).backgroundColor) : [0, 0, 0, 0];
+    const [r, g, b, a] = compositeRgba(bodyBackground, rootBackground);
+    if (a > 0) return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+    const cs = getComputedStyle(root).colorScheme;
+    if (cs.includes("dark") && !cs.includes("light")) return true;
+    if (cs.includes("light") && !cs.includes("dark")) return false;
+    return darkQuery.matches;
+  }
+
+  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({ el, src: el.textContent }));
+  let applied, rendering = false, queued = false;
+  function queueRender() { queued = true; if (rendering) return; void render(); }
+  async function render() {
+    rendering = true;
+    try {
+      while (queued) {
+        queued = false;
+        const t = pageIsDark() ? "dark" : "default";
+        if (t === applied) continue;
+        mermaid.initialize({ startOnLoad: false, theme: t, securityLevel: "strict" });
+        for (const { el, src } of diagrams) { el.removeAttribute("data-processed"); el.textContent = src; }
+        try { await mermaid.run({ nodes: diagrams.map((d) => d.el) }); }
+        catch (error) { console.error("Mermaid diagram render failed:", error); return; }
+        applied = t;
+      }
+    } finally { rendering = false; if (queued) queueRender(); }
+  }
+  if (document.readyState === "complete") queueRender();
+  else window.addEventListener("load", queueRender, { once: true });
+  const themeObserver = new MutationObserver(queueRender);
+  for (const el of [document.documentElement, document.body]) {
+    if (!el) continue;
+    themeObserver.observe(el, { attributes: true, attributeFilter: ["data-theme", "class", "style"] });
+  }
+  document.addEventListener("change", queueRender, true);
+  document.addEventListener("transitionend", ({ propertyName }) => {
+    if (propertyName === "background-color") queueRender();
+  }, true);
+  darkQuery.addEventListener("change", queueRender);
+</script>
+
+</body>
+</html>
