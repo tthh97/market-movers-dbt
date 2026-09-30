@@ -1,0 +1,3 @@
+rule_id,group_id,event_type,z_threshold,severity,enabled,note
+z_move_medium,all,z_move,2.5,medium,true,Any non-benchmark name moving 2.5x its own trailing daily volatility
+z_move_high,all,z_move,4.0,high,true,Any non-benchmark name moving 4x its own trailing daily volatility

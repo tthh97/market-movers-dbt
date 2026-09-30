@@ -8,19 +8,19 @@ narrative it embeds is the one artefact this script does not compute, and it is
 only ever read from a report the publication gate already passed - see
 _load_narrative below.
 
-Two backends, the same split report.py uses:
+Two backends, picked by DBT_TARGET like everything else in the repo:
 
-  VIZ_TARGET=snowflake (default) - the real marts, via the standard
+  DBT_TARGET=snowflake (default) - the real marts, via the standard
       SNOWFLAKE_* variables. Locally those resolve to the read-only REPORTER
       identity in agent/.env; in CI they are already exported by the dbt step,
       so the dashboard needs no secret of its own.
-  VIZ_TARGET=duckdb - the repo's market.duckdb, opened read_only=True. This is
+  DBT_TARGET=duckdb - the repo's market.duckdb, opened read_only=True. This is
       what CI stage 1 runs: it proves the generator works before stage 2 spends
       anything on Snowflake.
 
 Usage (from the project root, with the project venv):
     .venv/bin/python3 scripts/build_viz.py
-    VIZ_TARGET=duckdb .venv/bin/python3 scripts/build_viz.py
+    DBT_TARGET=duckdb .venv/bin/python3 scripts/build_viz.py
 
 This replaced an earlier CSV export whose output still had to be rendered by
 hand afterwards. A dashboard that needs a human in the loop is not a layer.
@@ -57,24 +57,24 @@ load_dotenv(os.path.join(ROOT, "agent", ".env"))
 # because the dashboard aggregates over the whole result, not its first page.
 # ---------------------------------------------------------------------------
 
-sys.path.insert(0, os.path.join(ROOT, "agent"))
+sys.path[:0] = [ROOT, os.path.join(ROOT, "agent")]
 import query  # noqa: E402 - the shared read-only QueryRunner lives in agent/
+import warehouse  # noqa: E402 - the engine switch and the DuckDB path
 
 
 class _Backend:
-    def __init__(self, engine: str):
-        self._runner = query.QueryRunner(engine)
-        if engine == "snowflake":
+    def __init__(self):
+        self._runner = query.QueryRunner()
+        self.engine = self._runner.engine
+        if self.engine == "snowflake":
             self.label = "Snowflake"
             self.detail = (
-                f'{query.require("SNOWFLAKE_DATABASE")}.'
-                f'{query.require("SNOWFLAKE_SCHEMA")}'
+                f'{warehouse.require("SNOWFLAKE_DATABASE")}.'
+                f'{warehouse.require("SNOWFLAKE_SCHEMA")}'
             )
         else:
             self.label = "DuckDB"
-            path = os.environ.get(
-                "MARKET_DUCKDB_PATH", os.path.join(ROOT, "market.duckdb"))
-            self.detail = os.path.basename(path)
+            self.detail = os.path.basename(warehouse.DUCKDB_PATH)
 
     def rows(self, sql: str) -> list[dict]:
         result = self._runner.run(sql, limit=None)
@@ -83,13 +83,22 @@ class _Backend:
         cols = [c.lower() for c in result.columns]
         return [dict(zip(cols, r)) for r in result.rows]
 
+    def optional_rows(self, sql: str) -> list[dict] | None:
+        """rows(), or None when the relation has not been built yet.
+
+        Only a missing relation is tolerated. Any other error still raises, so
+        a broken query cannot pass itself off as "nothing to show".
+        """
+        result = self._runner.run(sql, limit=None)
+        if result.is_error:
+            if "does not exist" in result.error.lower():
+                return None
+            raise RuntimeError(result.error)
+        cols = [c.lower() for c in result.columns]
+        return [dict(zip(cols, r)) for r in result.rows]
+
     def close(self) -> None:
         self._runner.close()
-
-
-def _backend():
-    target = os.environ.get("VIZ_TARGET", "snowflake").lower()
-    return _Backend("duckdb" if target == "duckdb" else "snowflake")
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +111,14 @@ select count(*) as n_rows,
        min(trade_date) as first_dt,
        max(trade_date) as last_dt
 from fct_prices
+"""
+
+# Where the rows came from. The DuckDB file can hold the synthetic sample or
+# live yfinance prices, so the banner is decided by the data, not the engine.
+Q_SOURCES = """
+select source, count(*) as n_rows
+from fct_prices
+group by source
 """
 
 Q_ASSET_CLASS = """
@@ -130,6 +147,22 @@ from mart_sector_overview
 order by avg_ret_1d desc
 """
 
+Q_ALERTS = """
+select alert_id, research_unit_id, ticker, sector, trade_date, severity,
+       daily_return, z, move_scope, market_z
+from fct_price_alerts
+order by trade_date, ticker
+"""
+
+# Written by the research agent, loaded by the build, modelled by dbt. Until
+# that layer exists the query fails with "does not exist" and every alert
+# shows as not yet researched - the page never invents a cause.
+Q_EXPLANATIONS = """
+select alert_id, cause_summary, category, sources, confidence,
+       confidence_reason, verifier_status
+from fct_alert_explanations
+"""
+
 Q_PRICES = """
 select w.sector, w.is_benchmark, p.ticker, p.trade_date, p.close_price
 from fct_prices p
@@ -147,6 +180,15 @@ order by p.trade_date, p.ticker
 
 def _as_date(value) -> date:
     return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+
+
+def price_series(price_rows: list[dict]) -> dict[str, list[tuple[date, float]]]:
+    out: dict[str, list] = defaultdict(list)
+    for r in price_rows:
+        out[r["ticker"]].append((_as_date(r["trade_date"]), float(r["close_price"])))
+    for v in out.values():
+        v.sort()
+    return out
 
 
 def sector_index(price_rows: list[dict]) -> tuple[dict[str, list], list[date]]:
@@ -203,7 +245,13 @@ def sector_index(price_rows: list[dict]) -> tuple[dict[str, list], list[date]]:
 _TARGET_MARKER = re.compile(r"<!--\s*generated-from:\s*(\w+)\s*-->")
 
 
-def _load_narrative(target: str) -> tuple[str, str] | None:
+# A weekly report covers the week before it was published. Once the data runs
+# further past it than this, the prose describes a market the charts no longer
+# show, so it is left off rather than shown next to them.
+NARRATIVE_MAX_AGE_DAYS = 7
+
+
+def _load_narrative(target: str, as_of: date) -> tuple[str, str] | None:
     """(iso_date, markdown_body) of the newest published report, or None.
 
     The target has to match. A report written against Snowflake describes real
@@ -213,12 +261,21 @@ def _load_narrative(target: str) -> tuple[str, str] | None:
 
     A report with no marker is skipped rather than guessed at - fail closed, the
     same rule the publication gate itself uses.
+
+    The target alone does not prove the report describes this data: a DuckDB
+    file can hold the synthetic seed one week and a live download the next.
+    So a report published more than NARRATIVE_MAX_AGE_DAYS before the latest
+    session in the data is skipped as stale.
     """
     published = sorted(glob.glob(os.path.join(REPORTS_DIR, "*-weekly-report.md")))
     if not published:
         return None
     path = published[-1]
     stamp = os.path.basename(path)[:10]
+    if (as_of - date.fromisoformat(stamp)).days > NARRATIVE_MAX_AGE_DAYS:
+        print(f"  note: skipping narrative from {os.path.basename(path)} "
+              f"(published {stamp}, data runs to {as_of.isoformat()})", file=sys.stderr)
+        return None
     with open(path, encoding="utf-8") as f:
         body = f.read()
     marker = _TARGET_MARKER.search(body)
@@ -284,14 +341,19 @@ def esc(v) -> str:
 # Charts. Hand-built SVG: no chart library, no CDN, no runtime fetch, so the
 # file works offline, survives any CSP, and is one artifact to upload.
 #
-# Palette is the validated default (validate_palette.js, 4 categorical slots,
-# both modes ALL CHECKS PASS). Light mode flags aqua and yellow below 3:1
-# against the surface, which obliges relief: every line is direct-labelled at
-# its end and every value also appears in the table view below.
+# Palette is the validated default (validate_palette.js, 5 categorical slots,
+# both modes ALL CHECKS PASS). Light mode flags aqua, yellow and magenta below
+# 3:1 against the surface, which obliges relief: every line is direct-labelled
+# at its end and every value also appears in the table view below.
 # ---------------------------------------------------------------------------
 
 SECTOR_SLOT = {}          # filled at render time, fixed order, never cycled
-SLOT_ORDER = ["s1", "s2", "s3", "s4"]
+SLOT_ORDER = ["s1", "s2", "s3", "s4", "s5"]
+# Colour follows the sector, not its alphabetical position: adding a sector
+# must not repaint the ones readers already know. New sectors take the next
+# free slot in SLOT_ORDER.
+FIXED_SLOT = {"crypto": "s1", "financials": "s2", "industrials": "s3",
+              "tech": "s4", "commodities": "s5"}
 
 
 def _nice_step(span: float, target: int = 4) -> float:
@@ -412,10 +474,21 @@ def chart_movers(rows: list[dict]) -> str:
     return "".join(parts)
 
 
+def _assign_slots(sectors) -> None:
+    free = [sl for sl in SLOT_ORDER if sl not in FIXED_SLOT.values()]
+    for name in sorted(sectors):
+        if name in FIXED_SLOT:
+            SECTOR_SLOT[name] = FIXED_SLOT[name]
+        elif free:
+            SECTOR_SLOT[name] = free.pop(0)
+        else:  # more sectors than slots: fold into muted ink, never a new hue
+            SECTOR_SLOT[name] = "muted"
+
+
 def chart_sector_index(index: dict[str, list], all_dates: list[date]) -> str:
     """Sector equal-weight indices rebased to 100, plus the benchmark.
 
-    Four sectors is four categorical slots, assigned in fixed order and held by
+    Each sector holds one categorical slot, fixed by FIXED_SLOT and held by
     the sector rather than by rank, so a sector that moves in the table never
     changes colour here. The benchmark deliberately takes muted ink instead of
     a fifth hue: it is context, not a peer.
@@ -424,8 +497,7 @@ def chart_sector_index(index: dict[str, list], all_dates: list[date]) -> str:
     if not series or len(all_dates) < 2:
         return "<p class='empty'>Not enough price history to plot an index.</p>"
 
-    for i, name in enumerate(sorted(series)):
-        SECTOR_SLOT[name] = SLOT_ORDER[i % len(SLOT_ORDER)]
+    _assign_slots(series)
 
     bench = index.get("benchmark", [])
     width, height = 780, 300
@@ -557,15 +629,15 @@ CSS = """
 :root{color-scheme:light;
 --surface-1:#fcfcfb;--page:#f9f9f7;--text-primary:#0b0b0b;--text-secondary:#52514e;
 --text-muted:#898781;--grid:#e1e0d9;--baseline:#c3c2b7;--border:rgba(11,11,11,.10);
---s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--pos:#2a78d6;--neg:#e34948;}
+--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--pos:#2a78d6;--neg:#e34948;}
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme=light])){color-scheme:dark;
 --surface-1:#1a1a19;--page:#0d0d0d;--text-primary:#fff;--text-secondary:#c3c2b7;
 --text-muted:#898781;--grid:#2c2c2a;--baseline:#383835;--border:rgba(255,255,255,.10);
---s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--pos:#3987e5;--neg:#e66767;}}
+--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--pos:#3987e5;--neg:#e66767;}}
 :root[data-theme=dark]{color-scheme:dark;
 --surface-1:#1a1a19;--page:#0d0d0d;--text-primary:#fff;--text-secondary:#c3c2b7;
 --text-muted:#898781;--grid:#2c2c2a;--baseline:#383835;--border:rgba(255,255,255,.10);
---s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--pos:#3987e5;--neg:#e66767;}
+--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--pos:#3987e5;--neg:#e66767;}
 *{box-sizing:border-box}
 body{margin:0;background:var(--page);color:var(--text-primary);line-height:1.55;
 font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;}
@@ -591,11 +663,14 @@ svg{width:100%;height:auto;display:block;overflow:visible}
 .endlab{font-size:11.5px;font-weight:600}
 .pos{fill:var(--pos)}.neg{fill:var(--neg)}
 .s1fill{fill:var(--s1)}.s2fill{fill:var(--s2)}.s3fill{fill:var(--s3)}.s4fill{fill:var(--s4)}
+.s5fill{fill:var(--s5)}.mutedfill{fill:var(--text-muted)}
 .line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
 .line.s1{stroke:var(--s1)}.line.s2{stroke:var(--s2)}
 .line.s3{stroke:var(--s3)}.line.s4{stroke:var(--s4)}
+.line.s5{stroke:var(--s5)}.line.muted{stroke:var(--text-muted)}
 .endlab.s1{fill:var(--s1)}.endlab.s2{fill:var(--s2)}
 .endlab.s3{fill:var(--s3)}.endlab.s4{fill:var(--s4)}
+.endlab.s5{fill:var(--s5)}.endlab.muted{fill:var(--text-muted)}
 .line.bench{stroke:var(--text-muted);stroke-width:1.5;opacity:.75}
 .endlab.bench{fill:var(--text-muted);font-weight:500}
 .xhair{stroke:var(--baseline);stroke-width:1}
@@ -633,6 +708,41 @@ padding:8px 10px;font-size:12.5px;box-shadow:0 4px 14px rgba(0,0,0,.13);z-index:
 max-width:270px}
 #tip b{display:block;font-size:13px;margin-bottom:2px}
 #tip .r{color:var(--text-secondary);font-variant-numeric:tabular-nums}
+svg.timeline{min-width:640px}
+.mkt{stroke:var(--text-muted);stroke-width:1;stroke-dasharray:2 3;opacity:.7}
+.mark{stroke:var(--surface-1);stroke-width:1}
+.tipped{cursor:default}.tipped:focus{outline:none}
+.tipped:hover .hit,.tipped:focus .hit{fill:var(--grid);opacity:.6}
+.alert{border-top:.5px solid var(--border);padding:14px 0 6px}
+.alert header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;margin:0 0 8px}
+.alert .when{font-variant-numeric:tabular-nums;color:var(--text-muted);font-size:13px}
+.alert .what{font-weight:600}
+.alert .badge{margin-left:0}
+.sev-high{border-color:var(--neg);color:var(--text-primary)}
+.alert-grid{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr);gap:18px}
+@media (max-width:640px){.alert-grid{grid-template-columns:minmax(0,1fr)}}
+.spark{max-width:280px}
+.sparkline{fill:none;stroke:var(--text-secondary);stroke-width:2;stroke-linejoin:round}
+.sparkdot{fill:var(--s1);stroke:var(--surface-1);stroke-width:2}
+.moves,.srcs{list-style:none;margin:6px 0 0;padding:0;font-size:13px;
+font-variant-numeric:tabular-nums}
+.moves li{display:inline-block;margin:0 12px 2px 0}
+.moves .tk{font-weight:600}.moves .up{color:var(--pos)}.moves .down{color:var(--neg)}
+.zz{color:var(--text-muted);font-size:12px;margin:2px 0 0}
+.why h3{margin:0 0 4px;font-size:13px;color:var(--text-muted);font-weight:500;
+text-transform:uppercase;letter-spacing:.04em}
+.why .pending{color:var(--text-secondary);font-size:13.5px;margin:0;
+border-left:3px solid var(--grid);padding:2px 0 2px 10px}
+.why .cause{margin:0 0 6px;font-size:14.5px}
+.why .status{margin:0 0 4px;font-size:12.5px;font-weight:600}
+.why .status.ok{color:var(--text-secondary)}
+.why .status.bad{color:var(--neg)}
+.why .draft{color:var(--text-muted);font-size:13px}
+.why .draft summary{cursor:pointer;color:var(--text-secondary)}
+.why .draft .cause{font-size:13.5px;color:var(--text-secondary);margin-top:6px}
+.why .meta{margin:0;font-size:12.5px;color:var(--text-secondary)}
+.chip{border:.5px solid var(--border);border-radius:999px;padding:1px 8px}
+.srcs a{color:var(--s1)}
 footer{color:var(--text-muted);font-size:12.5px;margin-top:30px;
 border-top:.5px solid var(--border);padding-top:14px}
 """
@@ -656,6 +766,14 @@ document.querySelectorAll('.bar-row').forEach(g=>{
  // answers to a mouse is a value some readers cannot reach at all.
  g.addEventListener('focus',()=>{const r=g.getBoundingClientRect();
    show(body,r.left+r.width/2,r.top+r.height);});
+ g.addEventListener('blur',hide);
+});
+document.querySelectorAll('.tipped').forEach(g=>{
+ const body=g.dataset.tip;
+ g.addEventListener('mousemove',e=>show(body,e.clientX,e.clientY));
+ g.addEventListener('mouseleave',hide);
+ g.addEventListener('focus',()=>{const r=g.getBoundingClientRect();
+   show(body,r.left+r.width/2,r.top);});
  g.addEventListener('blur',hide);
 });
 const SERIES=JSON.parse(document.getElementById('series-data').textContent);
@@ -682,6 +800,202 @@ if(hit&&SERIES.dates.length){
 """
 
 
+def _slot_var(slot: str) -> str:
+    return "var(--text-muted)" if slot == "muted" else f"var(--{slot})"
+
+
+SCOPE_LABEL = {"market_wide": "market-wide", "sector": "sector-wide", "stock": "stock-specific"}
+SEVERITY_RANK = {"high": 2, "medium": 1}
+
+
+def research_units(alerts: list[dict]) -> list[dict]:
+    """Group alerts by research_unit_id, the grouping fct_price_alerts assigns
+    and the research agent uses: one cause per market-wide day, per sector-wide
+    day, or per stock move. Newest first.
+    """
+    units: dict[str, dict] = {}
+    for a in alerts:
+        d = _as_date(a["trade_date"])
+        scope = a["move_scope"]
+        key = a["research_unit_id"]
+        if scope == "market_wide":
+            label = "Market-wide move"
+        elif scope == "sector":
+            label = f'{a["sector"].capitalize()} sector move'
+        else:
+            label = a["ticker"]
+        u = units.setdefault(key, {"date": d, "scope": scope, "label": label, "alerts": []})
+        u["alerts"].append(a)
+    out = list(units.values())
+    for u in out:
+        u["alerts"].sort(key=lambda a: -abs(float(a["z"])))
+        u["severity"] = max(u["alerts"], key=lambda a: SEVERITY_RANK.get(a["severity"], 0))["severity"]
+    out.sort(key=lambda u: (u["date"], SEVERITY_RANK.get(u["severity"], 0)), reverse=True)
+    return out
+
+
+def _tip(title: str, *lines: str) -> str:
+    """A data-tip attribute value: escaped once for the markup, once for the attribute."""
+    body = f"<b>{esc(title)}</b>" + "".join(f'<span class="r">{esc(x)}</span><br>' for x in lines)
+    return esc(body)
+
+
+def chart_alert_timeline(alerts: list[dict], all_dates: list[date]) -> str:
+    """Every alert in history on one time axis, one row per sector.
+
+    Up and down are carried by the triangle's direction, not by colour, so the
+    sector keeps its categorical hue. High severity draws a larger mark. A
+    market-wide day gets a hairline across all rows, because that is the one
+    scope that is not about any single row.
+    """
+    if not alerts or len(all_dates) < 2:
+        return "<p class='empty'>No alerts in this build.</p>"
+    sectors = sorted({a["sector"] for a in alerts},
+                     key=lambda x: SLOT_ORDER.index(SECTOR_SLOT[x]) if SECTOR_SLOT.get(x) in SLOT_ORDER else 99)
+    row_h, pad_l, pad_r, pad_t, pad_b = 34, 96, 16, 10, 26
+    width = 780
+    plot_w = width - pad_l - pad_r
+    height = pad_t + row_h * len(sectors) + pad_b
+    d0, d1 = all_dates[0].toordinal(), all_dates[-1].toordinal()
+    span = max(d1 - d0, 1)
+
+    def x_of(d: date) -> float:
+        return pad_l + (d.toordinal() - d0) / span * plot_w
+
+    # min-width keeps the marks and labels legible on a phone: the chart
+    # scrolls inside its card instead of shrinking to unreadable.
+    parts = [f'<div class="scroll"><svg class="timeline" viewBox="0 0 {width} {height}" '
+             f'role="img" aria-label="Price alerts over time by sector">']
+    bottom = pad_t + row_h * len(sectors)
+    for d in sorted({_as_date(a["trade_date"]) for a in alerts if a["move_scope"] == "market_wide"}):
+        gx = x_of(d)
+        parts.append(f'<line class="mkt" x1="{gx:.1f}" y1="{pad_t}" x2="{gx:.1f}" y2="{bottom}"/>')
+    for i, sec in enumerate(sectors):
+        cy = pad_t + i * row_h + row_h / 2
+        parts.append(f'<line class="grid" x1="{pad_l}" y1="{cy:.1f}" x2="{width - pad_r}" y2="{cy:.1f}"/>')
+        parts.append(f'<text class="tickerlab" x="{pad_l - 10}" y="{cy + 4:.1f}" text-anchor="end">{esc(sec)}</text>')
+    # Month ticks on the shared axis.
+    seen = set()
+    for d in all_dates:
+        if d.day <= 7 and (d.year, d.month) not in seen:
+            seen.add((d.year, d.month))
+            if d.month in (1, 4, 7, 10):
+                gx = x_of(d)
+                parts.append(f'<text class="tick" x="{gx:.1f}" y="{height - 8}" text-anchor="middle">{d.strftime("%b %Y")}</text>')
+    for a in sorted(alerts, key=lambda a: SEVERITY_RANK.get(a["severity"], 0)):
+        d = _as_date(a["trade_date"])
+        cx = x_of(d)
+        cy = pad_t + sectors.index(a["sector"]) * row_h + row_h / 2
+        size = 7.5 if a["severity"] == "high" else 5
+        up = float(a["daily_return"]) >= 0
+        pts = (f"{cx:.1f},{cy - size:.1f} {cx - size:.1f},{cy + size * .8:.1f} {cx + size:.1f},{cy + size * .8:.1f}"
+               if up else
+               f"{cx:.1f},{cy + size:.1f} {cx - size:.1f},{cy - size * .8:.1f} {cx + size:.1f},{cy - size * .8:.1f}")
+        tip = _tip(f'{a["ticker"]} {pct(a["daily_return"])}', d.isoformat(),
+                   f'z {num(a["z"])}, {a["severity"]} severity',
+                   f'scope: {SCOPE_LABEL.get(a["move_scope"], a["move_scope"])}')
+        parts.append(f'<g class="tipped" tabindex="0" data-tip="{tip}">'
+                     f'<circle class="hit" cx="{cx:.1f}" cy="{cy:.1f}" r="10"/>'
+                     f'<polygon class="mark {SECTOR_SLOT.get(a["sector"], "muted")}fill" points="{pts}"/></g>')
+    parts.append("</svg></div>")
+    return "".join(parts)
+
+
+def sparkline(series: list[tuple[date, float]], when: date, before: int = 15, after: int = 10) -> str:
+    """Closing price around one alert day, the day itself marked."""
+    idx = next((i for i, (d, _) in enumerate(series) if d == when), None)
+    if idx is None:
+        return "<p class='empty'>No price series for this day.</p>"
+    win = series[max(0, idx - before): idx + after + 1]
+    lo, hi = min(v for _, v in win), max(v for _, v in win)
+    pad = (hi - lo) * .12 or 1.0
+    lo, hi = lo - pad, hi + pad
+    w, h, px, py = 260, 74, 4, 8
+
+    def xy(i: int, v: float) -> tuple[float, float]:
+        x = px + i / max(len(win) - 1, 1) * (w - 2 * px)
+        y = py + (hi - v) / (hi - lo) * (h - 2 * py)
+        return x, y
+
+    path = " ".join(f'{"M" if i == 0 else "L"}{x:.1f},{y:.1f}'
+                    for i, (x, y) in enumerate(xy(i, v) for i, (_, v) in enumerate(win)))
+    k = idx - max(0, idx - before)
+    mx, my = xy(k, win[k][1])
+    return (f'<svg class="spark" viewBox="0 0 {w} {h}" role="img" '
+            f'aria-label="Closing price around {when.isoformat()}">'
+            f'<line class="xhair" x1="{mx:.1f}" y1="0" x2="{mx:.1f}" y2="{h}"/>'
+            f'<path class="sparkline" d="{path}"/>'
+            f'<circle class="sparkdot" cx="{mx:.1f}" cy="{my:.1f}" r="4"/></svg>')
+
+
+def alert_cards(units: list[dict], prices: dict[str, list], explanations: dict | None,
+                limit: int = 8) -> str:
+    """Each price move beside the explanation of it."""
+    if not units:
+        return "<p class='empty'>No alerts in this build.</p>"
+    cards = []
+    for u in units[:limit]:
+        lead = u["alerts"][0]
+        moves = "".join(
+            f'<li><span class="tk">{esc(a["ticker"])}</span> '
+            f'<span class="{"up" if float(a["daily_return"]) >= 0 else "down"}">{pct(a["daily_return"])}</span> '
+            f'<span class="zz">z {num(a["z"])}</span></li>'
+            for a in u["alerts"][:6])
+        more = len(u["alerts"]) - 6
+        if more > 0:
+            moves += f'<li class="zz">+{more} more</li>'
+        exp = None
+        if explanations:
+            exp = next((explanations[a["alert_id"]] for a in u["alerts"] if a["alert_id"] in explanations), None)
+        if exp:
+            srcs = exp.get("sources") or []
+            if isinstance(srcs, str):
+                try:
+                    srcs = json.loads(srcs)
+                except ValueError:
+                    srcs = []
+            src_html = "".join(
+                f'<li><a href="{esc(x.get("url", ""))}" rel="noopener">{esc(x.get("title") or x.get("url", ""))}</a>'
+                f' <span class="zz">{esc(x.get("published", ""))}</span></li>' for x in srcs)
+            meta = (f'<p class="meta"><span class="chip">{esc(exp["category"])}</span> '
+                    f'confidence {esc(exp["confidence"])} - {esc(exp.get("confidence_reason") or "")}</p>')
+            if exp["verifier_status"] == "verified" and exp["category"] == "unknown":
+                # A checked "no cause found" is an answer, not a confirmed cause.
+                panel = (f'<p class="status">No clear cause in the news</p>'
+                         f'<p class="cause">{esc(exp["cause_summary"])}</p>{meta}')
+            elif exp["verifier_status"] == "verified":
+                panel = (f'<p class="status ok">&#10003; Verified</p>'
+                         f'<p class="cause">{esc(exp["cause_summary"])}</p>'
+                         f'{meta}<ul class="srcs">{src_html}</ul>')
+            else:
+                # A rejected draft is shown as a draft, with the reason, never
+                # dressed as the answer.
+                reason = esc((exp.get("verifier_notes") or "").strip()[:400])
+                panel = (f'<p class="status bad">&#10005; Rejected by the verifier - no '
+                         f'confirmed cause yet. Retried after a day.</p>'
+                         f'<details class="draft"><summary>Rejected draft and reason</summary>'
+                         f'<p class="cause">{esc(exp["cause_summary"])}</p>{meta}'
+                         f'<p class="meta">Verifier: {reason}</p>'
+                         f'<ul class="srcs">{src_html}</ul></details>')
+        else:
+            panel = ('<p class="pending"><strong>Not researched yet.</strong> The research '
+                     'agent fills this panel with the cause, its category, dated sources, '
+                     'and a confidence the verifier has checked. Until then the move is '
+                     'shown without a reason rather than with a guessed one.</p>')
+        cards.append(
+            f'<article class="alert">'
+            f'<header><span class="when">{u["date"].isoformat()}</span>'
+            f'<span class="what">{esc(u["label"])}</span>'
+            f'<span class="badge">{esc(SCOPE_LABEL.get(u["scope"], u["scope"]))}</span>'
+            f'<span class="badge sev-{esc(u["severity"])}">{esc(u["severity"])}</span></header>'
+            f'<div class="alert-grid"><div class="move">'
+            f'{sparkline(prices.get(lead["ticker"], []), u["date"])}'
+            f'<p class="zz">{esc(lead["ticker"])} close, 15 sessions before to 10 after</p>'
+            f'<ul class="moves">{moves}</ul></div>'
+            f'<div class="why"><h3>Why it moved</h3>{panel}</div></div></article>')
+    return "".join(cards)
+
+
 def build_page(data: dict) -> str:
     cov = data["coverage"]
     movers, sectors, momentum = data["movers"], data["sectors"], data["momentum"]
@@ -693,6 +1007,34 @@ def build_page(data: dict) -> str:
         "index": chart_sector_index(idx, all_dates),
         "sectors": chart_sector_bars(sectors),
     }
+    alerts = data.get("alerts")
+    if alerts is None:
+        alerts_html = ('<p class="note">fct_price_alerts has not been built in this '
+                       'warehouse yet. It appears after the next dbt build.</p>')
+    else:
+        units = research_units(alerts)
+        n_units = len(units)
+        def status(u):
+            for a in u["alerts"]:
+                e = (data["explanations"] or {}).get(a["alert_id"])
+                if e:
+                    if e["verifier_status"] == "verified" and e["category"] == "unknown":
+                        return "no_cause"
+                    return e["verifier_status"]
+            return None
+        verified = sum(1 for u in units if status(u) == "verified")
+        no_cause = sum(1 for u in units if status(u) == "no_cause")
+        rejected = sum(1 for u in units if status(u) == "rejected")
+        alerts_html = (
+            f'<p class="sub">{len(alerts)} alerts in history, grouped into {n_units} '
+            f'moves to explain ({verified} with a verified cause, {no_cause} with no '
+            f'clear cause in the news, {rejected} rejected, the rest '
+            f'not researched yet). Triangles point the way '
+            f'the price moved, larger means high severity, and a vertical line marks a '
+            f'market-wide day. Hover or tab to any mark.</p>'
+            f'{chart_alert_timeline(alerts, all_dates)}'
+            f'<h3>Latest moves</h3>'
+            f'{alert_cards(units, data["price_series"], data["explanations"])}')
 
     # KPI tiles. Proportional figures on purpose: tabular-nums makes a standalone
     # number look loose at this size, and nothing here has to align vertically.
@@ -716,7 +1058,7 @@ def build_page(data: dict) -> str:
         for k, v in sorted(ac.items()))
 
     legend = "".join(
-        f'<span><i style="background:var(--{SECTOR_SLOT[s]})"></i>{esc(s)}</span>'
+        f'<span><i style="background:{_slot_var(SECTOR_SLOT[s])}"></i>{esc(s)}</span>'
         for s in sorted(SECTOR_SLOT))
     legend += ('<span><i style="background:var(--text-muted)"></i>'
                'benchmarks (SPY, QQQ)</span>')
@@ -744,7 +1086,8 @@ def build_page(data: dict) -> str:
     # built from the synthetic seed on purpose - it needs no credentials and
     # puts no real position data on the open web - but a page of plausible
     # numbers that does not say so is just a lie with a chart on it.
-    if data["target"] == "duckdb":
+    sources = {r["source"] for r in data["sources"]}
+    if sources == {"synthetic"}:
         provenance = (
             '<p class="banner"><strong>Synthetic data.</strong> These figures come '
             'from <code>scripts/seed_sample.py</code>, not from market data. The '
@@ -752,12 +1095,22 @@ def build_page(data: dict) -> str:
             'dbt run; the prices are generated so the page needs no warehouse '
             'credentials and exposes no real holdings. Numbers here are not '
             'anyone\'s actual returns.</p>')
+    elif "synthetic" in sources:
+        provenance = (
+            '<p class="banner"><strong>Mixed data.</strong> This build holds both '
+            'synthetic rows and live prices. Rebuild from one source before '
+            'reading anything off it.</p>')
+    elif data["target"] == "duckdb":
+        provenance = (
+            '<p class="banner prod"><strong>Live market data</strong> from yfinance, '
+            'loaded into a local DuckDB file by <code>ingest.py</code>. Descriptive '
+            'only, and not investment advice.</p>')
     else:
         provenance = (
             '<p class="banner prod"><strong>Production data</strong>, refreshed by '
             'the nightly build. Descriptive only, and not investment advice.</p>')
 
-    narrative = _load_narrative(data["target"])
+    narrative = _load_narrative(data["target"], _as_date(cov["last_dt"]))
     if narrative:
         stamp, md = narrative
         narrative_html = (
@@ -771,13 +1124,14 @@ def build_page(data: dict) -> str:
         narrative_html = (
             '<div class="card"><h2>What happened</h2>'
             '<p class="note">No verified narrative for this run. The report agent '
-            'either has not run yet or its draft was blocked by the publication '
+            'has not run on this data, or its draft was blocked by the publication '
             'gate. The charts below are unaffected - they are computed directly '
             'from the marts and never depend on a model.</p></div>')
 
     # Line-chart hover data. Embedded as JSON rather than fetched, so the page
     # stays one file with no network dependency of any kind.
-    slot_hex = {"s1": "var(--s1)", "s2": "var(--s2)", "s3": "var(--s3)", "s4": "var(--s4)"}
+    slot_hex = {sl: f"var(--{sl})" for sl in SLOT_ORDER}
+    slot_hex["muted"] = "var(--text-muted)"
     date_list = [d.isoformat() for d in all_dates]
     series_json = {"dates": date_list, "series": []}
     for name in sorted(SECTOR_SLOT):
@@ -813,6 +1167,11 @@ each figure is as of the latest session for its own ticker.</p>
 <div class="kpis">{kpi_html}</div>
 
 {narrative_html}
+
+<div class="card">
+<h2>Price moves and why they happened</h2>
+{alerts_html}
+</div>
 
 <div class="card">
 <h2>One-day move by ticker</h2>
@@ -867,20 +1226,23 @@ def main() -> None:
                     help="output path, or a directory (written as index.html)")
     args = ap.parse_args()
 
-    target = os.environ.get("VIZ_TARGET", "snowflake").lower()
-    backend = _backend()
+    backend = _Backend()
     try:
         price_rows = backend.rows(Q_PRICES)
         idx, all_dates = sector_index(price_rows)
         data = {
             "coverage": backend.rows(Q_COVERAGE)[0],
             "asset_class": backend.rows(Q_ASSET_CLASS),
+            "sources": backend.rows(Q_SOURCES),
             "movers": backend.rows(Q_MOVERS),
             "momentum": backend.rows(Q_MOMENTUM),
             "sectors": backend.rows(Q_SECTORS),
+            "alerts": backend.optional_rows(Q_ALERTS),
+            "explanations": {r["alert_id"]: r for r in (backend.optional_rows(Q_EXPLANATIONS) or [])},
+            "price_series": price_series(price_rows),
             "index": idx,
             "dates": all_dates,
-            "target": target,
+            "target": backend.engine,
             "source_label": backend.label,
             "source_detail": backend.detail,
         }

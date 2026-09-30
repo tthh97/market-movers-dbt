@@ -1,5 +1,5 @@
 """
-Backend-agnostic writes into raw.prices.
+Backend-agnostic writes into raw.prices and raw.alert_explanations.
 
 Both loaders - ingest.py (real yfinance data) and scripts/seed_sample.py
 (synthetic offline data) - land rows in the same table, so the connect / DDL /
@@ -15,6 +15,10 @@ the data went:
 Both backends expose the same idempotent upsert on (ticker, trade_date), which
 is what lets a same-day re-run refresh rather than duplicate, and what the
 downstream incremental fct_prices relies on.
+
+raw.alert_explanations is append-only: every research run adds rows tagged with
+its run_id, and fct_alert_explanations picks the latest per alert. Nothing is
+ever updated in place, so an earlier explanation stays auditable.
 """
 
 from __future__ import annotations
@@ -24,6 +28,23 @@ from typing import Sequence
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DUCKDB_PATH = os.path.join(HERE, "market.duckdb")
+
+# Column order for a raw.alert_explanations row. The research agent writes
+# these as JSON lines; deep_agent/load_explanations.py loads them.
+EXPLANATION_COLUMNS = (
+    "alert_id",
+    "research_unit_id",
+    "cause_summary",
+    "category",
+    "sources",            # JSON text: [{"url", "title", "published"}]
+    "confidence",
+    "confidence_reason",
+    "verifier_status",
+    "verifier_notes",
+    "model",
+    "run_id",
+    "researched_at",
+)
 
 # The one authoritative column order for a raw.prices row. Every loader builds
 # tuples in exactly this order.
@@ -44,7 +65,13 @@ Row = tuple
 
 
 def target() -> str:
-    """The active backend: 'snowflake' (default) or 'duckdb'."""
+    """The active backend: 'snowflake' (default) or 'duckdb'.
+
+    The one engine switch for the whole repo. dbt reads the same DBT_TARGET
+    from profiles.yml, and every reader (QueryRunner, the dashboard, the report,
+    the deep agent) and writer (ingest, the seed, the explanations loader) asks
+    this function, so no two parts can end up on different warehouses.
+    """
     return os.environ.get("DBT_TARGET", "snowflake").strip().lower()
 
 
@@ -76,6 +103,28 @@ create table if not exists {db}.raw.prices (
     primary key (ticker, trade_date)
 )
 """
+
+_EXPLANATIONS_DDL = """
+create table if not exists {prefix}raw.alert_explanations (
+    alert_id          varchar,
+    research_unit_id  varchar,
+    cause_summary     varchar,
+    category          varchar,
+    sources           varchar,
+    confidence        varchar,
+    confidence_reason varchar,
+    verifier_status   varchar,
+    verifier_notes    varchar,
+    model             varchar,
+    run_id            varchar,
+    researched_at     timestamp
+)
+"""
+
+_EXPLANATIONS_INSERT = (
+    "insert into {prefix}raw.alert_explanations ("
+    + ", ".join(EXPLANATION_COLUMNS) + ") values ({marks})"
+)
 
 _SF_STAGE = "create or replace temporary table {db}.raw.prices_stage like {db}.raw.prices"
 
@@ -116,7 +165,10 @@ values
 """
 
 
-def _require(name: str) -> str:
+def require(name: str) -> str:
+    """A required SNOWFLAKE_* variable, or a loud failure. No identifier is ever
+    defaulted: a silent fallback to the wrong account or role is worse than a
+    stop."""
     value = os.environ.get(name, "").strip()
     if not value:
         raise SystemExit(
@@ -156,38 +208,55 @@ def load_private_key(env_prefix: str = "SNOWFLAKE") -> bytes:
     )
 
 
+def connect_snowflake(schema: str | None = None):
+    """A Snowflake connection from the SNOWFLAKE_* variables.
+
+    One function for both identities: the loader here and the read-only reader
+    in agent/query.py differ only in which role and schema the environment
+    names, so how a connection is built lives in one place.
+    """
+    import snowflake.connector
+
+    # No defaults for any identifier. Hardcoding the real database, role or
+    # warehouse would publish the account's layout in a public repo.
+    params = dict(
+        account=require("SNOWFLAKE_ACCOUNT"),
+        user=require("SNOWFLAKE_USER"),
+        role=require("SNOWFLAKE_ROLE"),
+        warehouse=require("SNOWFLAKE_WAREHOUSE"),
+        database=require("SNOWFLAKE_DATABASE"),
+        autocommit=True,
+    )
+    if schema:
+        params["schema"] = schema
+    # Prefer key-pair auth; Snowflake blocks password-only sign-in for
+    # service users, so CI always takes this branch.
+    if os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH", "").strip():
+        params["private_key"] = load_private_key()
+    else:
+        params["password"] = require("SNOWFLAKE_PASSWORD")
+    return snowflake.connector.connect(**params)
+
+
 class _Snowflake:
     def __init__(self) -> None:
-        import snowflake.connector
-
-        # No defaults for any identifier. Hardcoding the real database, role or
-        # warehouse would publish the account's layout in a public repo, and a
-        # silent fallback to the wrong role is worse than a loud failure.
-        self.database = _require("SNOWFLAKE_DATABASE")
-
-        params = dict(
-            account=_require("SNOWFLAKE_ACCOUNT"),
-            user=_require("SNOWFLAKE_USER"),
-            role=_require("SNOWFLAKE_ROLE"),
-            warehouse=_require("SNOWFLAKE_WAREHOUSE"),
-            database=self.database,
-            autocommit=True,
-        )
-
-        # Prefer key-pair auth; Snowflake blocks password-only sign-in for
-        # service users, so CI always takes this branch.
-        key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH", "").strip()
-        if key_path:
-            params["private_key"] = load_private_key()
-        else:
-            params["password"] = _require("SNOWFLAKE_PASSWORD")
-
-        self._con = snowflake.connector.connect(**params)
+        self.database = require("SNOWFLAKE_DATABASE")
+        self._con = connect_snowflake()
 
     def ensure_raw(self) -> None:
         # Table only - RAW schema is owned by the bootstrap, not the loader.
         cur = self._con.cursor()
         cur.execute(_SF_DDL_TABLE.format(db=self.database))
+        cur.execute(_EXPLANATIONS_DDL.format(prefix=f"{self.database}."))
+        cur.close()
+
+    def append_explanations(self, rows: Sequence[Row]) -> None:
+        if not rows:
+            return
+        marks = ", ".join(["%s"] * len(EXPLANATION_COLUMNS))
+        cur = self._con.cursor()
+        cur.executemany(
+            _EXPLANATIONS_INSERT.format(prefix=f"{self.database}.", marks=marks), list(rows))
         cur.close()
 
     def upsert(self, rows: Sequence[Row]) -> None:
@@ -246,6 +315,13 @@ class _DuckDB:
 
     def ensure_raw(self) -> None:
         self._con.execute(_DUCK_DDL)
+        self._con.execute(_EXPLANATIONS_DDL.format(prefix=""))
+
+    def append_explanations(self, rows: Sequence[Row]) -> None:
+        if rows:
+            marks = ", ".join(["?"] * len(EXPLANATION_COLUMNS))
+            self._con.executemany(
+                _EXPLANATIONS_INSERT.format(prefix="", marks=marks), list(rows))
 
     def upsert(self, rows: Sequence[Row]) -> None:
         if rows:
@@ -261,7 +337,7 @@ class _DuckDB:
 # --------------------------------------------------------------------------
 
 def connect():
-    """Open the warehouse named by DBT_TARGET, with raw.prices guaranteed to exist."""
+    """Open the warehouse named by DBT_TARGET, with both raw tables guaranteed to exist."""
     backend = target()
     if backend == "duckdb":
         wh = _DuckDB()

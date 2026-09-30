@@ -1,0 +1,38 @@
+version: 2
+
+seeds:
+  - name: alert_themes
+    description: >
+      Custom groups beyond the watchlist's sector. A ticker can sit in several
+      themes. Rules in alert_rules can target a theme by name.
+    columns:
+      - name: theme
+        tests: [not_null]
+      - name: ticker
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('watchlist')
+                field: ticker
+
+  - name: alert_rules
+    description: >
+      One row per detection rule. group_id is "all", a watchlist sector, or a
+      theme from alert_themes (checked by assert_alert_rule_groups_exist).
+      Changing a threshold is a reviewed diff to this file.
+    columns:
+      - name: rule_id
+        tests: [not_null, unique]
+      - name: event_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['z_move']
+      - name: severity
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['medium', 'high']
+      - name: z_threshold
+        tests: [not_null]

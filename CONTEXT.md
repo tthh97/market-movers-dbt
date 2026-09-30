@@ -10,10 +10,12 @@ the CI, and the agents.
 **Harness**:
 The scaffolding around a process that makes it repeatable, guarded, and
 self-checking - so a failure is loud and a bad output cannot silently ship. This
-repo has four: the **test/CI harness** (dbt tests + gated CI), the **triage
+repo has five: the **test/CI harness** (dbt tests + gated CI), the **triage
 harness** (failure capture, diagnosis, and proposed fix), the **agent harness**
-(the read-only analytics agent's loop, tools, policy, and evals), and the
-**report harness** (the weekly report's writer, matcher, verifier, and gate).
+(the read-only analytics agent's loop, tools, policy, and evals), the
+**report harness** (the weekly report's writer, matcher, verifier, and gate),
+and the **deep agent harness** (a coordinator, warehouse analyst, and
+fact-checker with approval-gated memory, served by LangGraph).
 _Avoid_: framework, wrapper, pipeline (when the self-checking property is the point).
 
 **Mover**:

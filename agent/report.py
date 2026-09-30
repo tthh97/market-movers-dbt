@@ -24,17 +24,17 @@ sequence - "subagent" sounds grand, but this is all it is.
                 build. Fabrication is structurally unable to reach the
                 reader.
 
-Targets:
+Targets, picked by DBT_TARGET like everything else in the repo:
 
-  REPORT_TARGET=snowflake (default) - reuses agent/tools.py: same read-only
+  DBT_TARGET=snowflake (default) - reuses agent/tools.py: same read-only
       role, same statement-shape guardrails, same query budget.
-  REPORT_TARGET=duckdb - local demo with zero credentials against the repo's
+  DBT_TARGET=duckdb - local demo with zero credentials against the repo's
       market.duckdb, opened with read_only=True so the read-only property is
       enforced by the engine, not promised by the prompt.
 
 Usage:
     python3 report.py                                  # Snowflake
-    REPORT_TARGET=duckdb python3 report.py             # offline demo
+    DBT_TARGET=duckdb python3 report.py                # offline demo
     python3 report.py --inject-fault fabricated_number # prove the gate works
 
 Fault injection mirrors scripts/inject_fault.py: the fault goes into the
@@ -55,6 +55,7 @@ from dotenv import load_dotenv
 
 import claims
 import policy
+import query
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
@@ -98,7 +99,6 @@ class _DuckDBBackend:
     """
 
     def __init__(self):
-        import query
         self._runner = query.QueryRunner("duckdb")
         self._render = query.render_for_model
 
@@ -117,8 +117,7 @@ class _DuckDBBackend:
 
 
 def _backend():
-    target = os.environ.get("REPORT_TARGET", "snowflake").lower()
-    if target == "duckdb":
+    if query.target() == "duckdb":
         return _DuckDBBackend()
     return _SnowflakeBackend()
 
@@ -349,7 +348,7 @@ def run(fault: str | None = None) -> int:
                 # because the dashboard reads these reports and must never put
                 # a Snowflake narrative on top of synthetic charts. A consumer
                 # that has to guess the provenance will eventually guess wrong.
-                target = os.environ.get("REPORT_TARGET", "snowflake").lower()
+                target = query.target()
                 with open(path, "w") as f:
                     f.write(f"# Weekly market report - {stamp}\n\n"
                             f"<!-- generated-from: {target} -->\n\n{draft}\n\n"
