@@ -65,7 +65,13 @@ Row = tuple
 
 
 def target() -> str:
-    """The active backend: 'snowflake' (default) or 'duckdb'."""
+    """The active backend: 'snowflake' (default) or 'duckdb'.
+
+    The one engine switch for the whole repo. dbt reads the same DBT_TARGET
+    from profiles.yml, and every reader (QueryRunner, the dashboard, the report,
+    the deep agent) and writer (ingest, the seed, the explanations loader) asks
+    this function, so no two parts can end up on different warehouses.
+    """
     return os.environ.get("DBT_TARGET", "snowflake").strip().lower()
 
 
@@ -159,7 +165,10 @@ values
 """
 
 
-def _require(name: str) -> str:
+def require(name: str) -> str:
+    """A required SNOWFLAKE_* variable, or a loud failure. No identifier is ever
+    defaulted: a silent fallback to the wrong account or role is worse than a
+    stop."""
     value = os.environ.get(name, "").strip()
     if not value:
         raise SystemExit(
@@ -199,33 +208,40 @@ def load_private_key(env_prefix: str = "SNOWFLAKE") -> bytes:
     )
 
 
+def connect_snowflake(schema: str | None = None):
+    """A Snowflake connection from the SNOWFLAKE_* variables.
+
+    One function for both identities: the loader here and the read-only reader
+    in agent/query.py differ only in which role and schema the environment
+    names, so how a connection is built lives in one place.
+    """
+    import snowflake.connector
+
+    # No defaults for any identifier. Hardcoding the real database, role or
+    # warehouse would publish the account's layout in a public repo.
+    params = dict(
+        account=require("SNOWFLAKE_ACCOUNT"),
+        user=require("SNOWFLAKE_USER"),
+        role=require("SNOWFLAKE_ROLE"),
+        warehouse=require("SNOWFLAKE_WAREHOUSE"),
+        database=require("SNOWFLAKE_DATABASE"),
+        autocommit=True,
+    )
+    if schema:
+        params["schema"] = schema
+    # Prefer key-pair auth; Snowflake blocks password-only sign-in for
+    # service users, so CI always takes this branch.
+    if os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH", "").strip():
+        params["private_key"] = load_private_key()
+    else:
+        params["password"] = require("SNOWFLAKE_PASSWORD")
+    return snowflake.connector.connect(**params)
+
+
 class _Snowflake:
     def __init__(self) -> None:
-        import snowflake.connector
-
-        # No defaults for any identifier. Hardcoding the real database, role or
-        # warehouse would publish the account's layout in a public repo, and a
-        # silent fallback to the wrong role is worse than a loud failure.
-        self.database = _require("SNOWFLAKE_DATABASE")
-
-        params = dict(
-            account=_require("SNOWFLAKE_ACCOUNT"),
-            user=_require("SNOWFLAKE_USER"),
-            role=_require("SNOWFLAKE_ROLE"),
-            warehouse=_require("SNOWFLAKE_WAREHOUSE"),
-            database=self.database,
-            autocommit=True,
-        )
-
-        # Prefer key-pair auth; Snowflake blocks password-only sign-in for
-        # service users, so CI always takes this branch.
-        key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH", "").strip()
-        if key_path:
-            params["private_key"] = load_private_key()
-        else:
-            params["password"] = _require("SNOWFLAKE_PASSWORD")
-
-        self._con = snowflake.connector.connect(**params)
+        self.database = require("SNOWFLAKE_DATABASE")
+        self._con = connect_snowflake()
 
     def ensure_raw(self) -> None:
         # Table only - RAW schema is owned by the bootstrap, not the loader.

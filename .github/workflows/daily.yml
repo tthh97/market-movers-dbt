@@ -161,7 +161,6 @@ jobs:
       # so this step introduces no new credential.
       - name: Build dashboard
         env:
-          VIZ_TARGET: snowflake
           SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE_TRANSFORMER }}
           SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
         run: python scripts/build_viz.py
