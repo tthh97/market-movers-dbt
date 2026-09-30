@@ -11,9 +11,10 @@ runs against **Snowflake** with key-pair auth and least-privilege roles; the sam
 models also run on **DuckDB** with **zero credentials**, so you can clone it and
 `dbt build` without an account.
 
-The watchlist holds 18 names grouped into four sectors - **tech**, **industrials**,
-**financials**, and **crypto** - plus two benchmarks (SPY, QQQ) kept as reference
-series, for 20 tracked tickers total. A few names are flagged as personal holdings
+The watchlist holds 20 names grouped into five sectors - **tech**, **industrials**,
+**financials**, **crypto**, and **commodities** (oil and natural gas, via the USO and
+UNG funds) - plus two benchmarks (SPY, QQQ) kept as reference series, for 22 tracked
+tickers total. A few names are flagged as personal holdings
 (NVDA, CAT, JPM, BTC) for the portfolio-bias view. The marts answer: *what's moving,
 which sector is hot, and how does my book behave relative to the Nasdaq?* Edit
 `seeds/watchlist.csv` to change the universe.

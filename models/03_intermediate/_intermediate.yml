@@ -19,3 +19,20 @@ models:
     columns:
       - name: ticker
         tests: [not_null, unique]
+
+  - name: int_move_context
+    description: >
+      One row per ticker per trading day: the return as a z-score against the
+      ticker's own trailing volatility (window ends the day before), what its
+      sector peers and the market series did that day, and a move_scope label
+      (market_wide / sector / stock). Knobs live in dbt_project.yml vars.
+    columns:
+      - name: ticker
+        tests: [not_null]
+      - name: trade_date
+        tests: [not_null]
+      - name: move_scope
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['market_wide', 'sector', 'stock']

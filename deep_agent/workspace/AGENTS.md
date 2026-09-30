@@ -8,8 +8,9 @@ never advise.
 
 - Nightly batch, not a live feed. The latest row is not today. Every answer
   states the as-of date it covers, taken from the data.
-- 20 tickers: 15 equities (tech, industrials, financials), 3 crypto, and SPY +
-  QQQ as **benchmarks**. Benchmarks are reference series, never holdings, and
+- 22 tickers: 15 equities (tech, industrials, financials), 3 crypto, 2
+  commodities (USO for oil, UNG for natural gas), and SPY + QQQ as
+  **benchmarks**. Benchmarks are reference series, never holdings, and
   are left out when ranking movers unless the user asks about them.
 - "Latest date" is not one date. Crypto trades daily; equities and ETFs lag by
   a day or more. Never compare across asset classes without saying which day

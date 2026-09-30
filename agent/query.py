@@ -11,7 +11,8 @@ The whole interface is small:
     runner = QueryRunner("snowflake")      # or "duckdb"
     result = runner.run("select ...")      # -> QueryResult(columns, rows, ...)
 
-The seam is `engine`: two real adapters - Snowflake in production (the read-only
+The seam is `engine`, which defaults to warehouse.target() (DBT_TARGET), the
+same switch dbt and the loaders use: two real adapters - Snowflake in production (the read-only
 REPORTER identity taken from the environment) and DuckDB offline (the repo's
 market.duckdb opened read_only=True, so the engine itself refuses writes). The
 read-only guard lives inside run(), so a caller cannot reach the warehouse a way
@@ -25,10 +26,18 @@ QueryResult.rows directly instead of parsing that text back apart.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+
+# warehouse.py at the root owns every connection setting: the engine switch,
+# the DuckDB path, and how a Snowflake connection is built.
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+import warehouse  # noqa: E402
+from warehouse import require, target  # noqa: E402,F401 - re-exported for this module's callers
 
 # Rows the agent shows the model per query. Callers that need the whole result
 # (the dashboard aggregates over it) pass limit=None to run().
@@ -70,55 +79,19 @@ def read_only_error(sql: str) -> str | None:
     return None
 
 
-def require(name: str) -> str:
-    """A required SNOWFLAKE_* variable, or a loud failure. No identifier is ever
-    defaulted - a silent fallback to the wrong account or role is worse than a
-    stop."""
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise SystemExit(
-            f"{name} is not set. Snowflake access needs SNOWFLAKE_ACCOUNT, "
-            "SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY_PATH, SNOWFLAKE_ROLE, "
-            "SNOWFLAKE_WAREHOUSE, SNOWFLAKE_DATABASE and SNOWFLAKE_SCHEMA. "
-            "See agent/.env.example, or use the duckdb engine offline."
-        )
-    return value
-
-
-def _connect_snowflake_reader():
-    import sys
-
-    if ROOT not in sys.path:
-        sys.path.insert(0, ROOT)
-    import warehouse  # load_private_key lives with the writer path, at the root
-    import snowflake.connector
-
-    return snowflake.connector.connect(
-        account=require("SNOWFLAKE_ACCOUNT"),
-        user=require("SNOWFLAKE_USER"),
-        private_key=warehouse.load_private_key(),
-        role=require("SNOWFLAKE_ROLE"),
-        warehouse=require("SNOWFLAKE_WAREHOUSE"),
-        database=require("SNOWFLAKE_DATABASE"),
-        schema=require("SNOWFLAKE_SCHEMA"),
-        autocommit=True,
-    )
-
-
 def _connect_duckdb_read_only():
     import duckdb
 
-    path = os.environ.get("MARKET_DUCKDB_PATH", os.path.join(ROOT, "market.duckdb"))
     # read_only=True is the engine enforcing what the guard promises: it refuses
     # writes itself, the offline counterpart to the REPORTER role on Snowflake.
-    return duckdb.connect(path, read_only=True)
+    return duckdb.connect(warehouse.DUCKDB_PATH, read_only=True)
 
 
 class QueryRunner:
     """Run read-only SQL against one engine and get rows back."""
 
-    def __init__(self, engine: str):
-        self.engine = engine.strip().lower()
+    def __init__(self, engine: str | None = None):
+        self.engine = (engine or warehouse.target()).strip().lower()
         if self.engine not in ("snowflake", "duckdb"):
             raise SystemExit(
                 f"Unknown engine {engine!r}. Expected 'snowflake' or 'duckdb'."
@@ -131,7 +104,7 @@ class QueryRunner:
         # warehouse awake.
         if self._con is None:
             self._con = (
-                _connect_snowflake_reader()
+                warehouse.connect_snowflake(schema=warehouse.require("SNOWFLAKE_SCHEMA"))
                 if self.engine == "snowflake"
                 else _connect_duckdb_read_only()
             )

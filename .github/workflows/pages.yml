@@ -56,12 +56,9 @@ jobs:
       - name: Build models
         run: dbt build --profiles-dir .
 
-      # VIZ_TARGET is set explicitly: the generator defaults to Snowflake, and a
-      # Pages job that silently tried to reach a warehouse would fail here for
-      # the right reason but for the wrong-looking one.
+      # The generator reads the job's DBT_TARGET, the same switch the build
+      # above used, so the page is always drawn from the warehouse just built.
       - name: Render dashboard
-        env:
-          VIZ_TARGET: duckdb
         run: python scripts/build_viz.py --out exports/dashboard.html
 
       # Rebuild the whole archive each run: bring forward every existing

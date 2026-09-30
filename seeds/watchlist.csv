@@ -17,5 +17,7 @@ MA,Mastercard,financials,equity,false,false
 BTC-USD,Bitcoin,crypto,crypto,true,false
 ETH-USD,Ethereum,crypto,crypto,false,false
 SOL-USD,Solana,crypto,crypto,false,false
+USO,United States Oil Fund,commodities,commodity,false,false
+UNG,United States Natural Gas Fund,commodities,commodity,false,false
 SPY,SPDR S&P 500 ETF,benchmark,etf,false,true
 QQQ,Invesco Nasdaq-100 ETF,benchmark,etf,false,true

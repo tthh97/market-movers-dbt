@@ -5,3 +5,6 @@ workspace/outputs/*
 # langgraph dev local state (threads, checkpoints)
 .langgraph_api/
 workspace/drafts/
+
+# research runs (explanations.jsonl), loaded into RAW by load_explanations.py
+runs/
