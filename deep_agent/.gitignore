@@ -1,0 +1,7 @@
+# Agent deliverables are regenerated on demand
+workspace/outputs/*
+!workspace/outputs/.gitkeep
+
+# langgraph dev local state (threads, checkpoints)
+.langgraph_api/
+workspace/drafts/
